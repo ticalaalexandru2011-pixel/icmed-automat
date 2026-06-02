@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.12
+// @version      1.13
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -459,6 +459,11 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
 
     // ── Completare antet: Factura + Nota receptie ─────────────────────────────
 
+    // Buton imagine ASP.NET dupa fragment de name/id (id-urile au prefix variabil ctl11_ctl02_)
+    function gasesteImgDupaNume(frag) {
+        return document.querySelector(`input[type="image"][name*="${frag}"], input[type="image"][id*="${frag}"]`);
+    }
+
     // Butonul "➕" (adauga) din randul unei etichete (ex. "Factura/Proces", "Nota receptie")
     function gasesteButonAdauga(labelText) {
         let lab = null;
@@ -527,7 +532,7 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
     }
 
     async function completeazaFactura(antet) {
-        const btn = gasesteButonAdauga('Factura/Proces');
+        const btn = gasesteImgDupaNume('btnAddFactura') || gasesteButonAdauga('Factura/Proces');
         if (!btn) throw new Error('nu gasesc butonul + de la Factura');
         btn.click();
         const deschis = await asteapta(() => {
@@ -580,7 +585,7 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
     }
 
     async function completeazaNota(antet) {
-        const btn = gasesteButonAdauga('Nota receptie');
+        const btn = gasesteImgDupaNume('btnNotaRec') || gasesteButonAdauga('Nota receptie');
         if (!btn) throw new Error('nu gasesc butonul + de la Nota receptie');
         btn.click();
         const popup = await asteapta(() => {
@@ -620,8 +625,10 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
     function antetEsteDone(antet) {
         return !!getAntetDone()[cheieAntet(antet) + '_' + PAGINA];
     }
-    // Detectie reala: campul "Factura/Proces" din pagina e completat?
+    // Detectie reala: combobox-ul "Factura" din pagina (cmbFactura_Display) e completat?
     function facturaPrezentaInPagina() {
+        const disp = document.querySelector('input[id*="cmbFactura_Display"], input[name*="cmbFactura$Display"]');
+        if (disp) return !!disp.value.trim();
         const inp = inputLangaLabel('Factura/Proces');
         return !!(inp && inp.value.trim());
     }

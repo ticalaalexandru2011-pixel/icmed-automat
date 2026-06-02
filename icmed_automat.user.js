@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.10
+// @version      1.11
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -16,6 +16,7 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_registerMenuCommand
+// @grant        GM_setClipboard
 // @connect      api.anthropic.com
 // ==/UserScript==
 
@@ -599,6 +600,57 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         await salveazaPopup();
     }
 
+    // ── Debug: auto-test selectori + HTML, copiat in clipboard ────────────────
+
+    function elInfo(el) {
+        if (!el) return 'NEGASIT';
+        const a = [];
+        if (el.id) a.push('id="' + el.id + '"');
+        if (el.name) a.push('name="' + el.name + '"');
+        if (el.type) a.push('type="' + el.type + '"');
+        if (el.src) a.push('src="' + el.src.split('/').pop() + '"');
+        if (el.title) a.push('title="' + el.title + '"');
+        return `GASIT <${el.tagName.toLowerCase()} ${a.join(' ')}>`;
+    }
+
+    function debugRaport() {
+        const L = [];
+        let ver = '?'; try { ver = GM_info.script.version; } catch (e) {}
+        L.push(`=== iCmed Automat DEBUG (pagina: ${PAGINA}, v${ver}) ===`);
+        L.push('Buton + Factura: ' + elInfo(gasesteButonAdauga('Factura/Proces')));
+        L.push('Buton + Nota:    ' + elInfo(gasesteButonAdauga('Nota receptie')));
+
+        const popup = gasestePopup();
+        if (popup) {
+            L.push('Popup deschis: DA');
+            ['Furnizor', 'Valoare fara', 'Valoare tva', 'Valoare totala', 'Serie', 'Numar', 'Data', 'Data scadenta'].forEach(lab => {
+                L.push(`  camp "${lab}": ` + elInfo(campInPopup(popup, lab)));
+            });
+            L.push('  buton cautare Furnizor: ' + elInfo(gasesteButonCautareIn(gasesteRandDupaLabel('Furnizor'))));
+            const salv = [...popup.querySelectorAll('button, input[type="button"], input[type="submit"], input[type="image"], a, span, div')]
+                .find(b => b.offsetParent && /salv/i.test((b.value || b.textContent || b.alt || b.title || '')));
+            L.push('  buton Salveaza: ' + elInfo(salv));
+            L.push('--- HTML POPUP (max 9000) ---');
+            L.push((popup.outerHTML || '').slice(0, 9000));
+        } else {
+            L.push('Popup deschis: NU (deschide popup-ul Factura/Nota/Furnizor si apasa Debug din nou)');
+        }
+
+        ['Factura/Proces', 'Nota receptie'].forEach(lab => {
+            let el = null;
+            for (const e of document.querySelectorAll('td, th, label')) {
+                if (e.textContent.trim().replace(':', '').trim().startsWith(lab)) { el = e; break; }
+            }
+            const row = el && (el.closest('tr') || el.parentElement);
+            if (row) { L.push(`--- HTML rand "${lab}" (max 3000) ---`); L.push((row.outerHTML || '').slice(0, 3000)); }
+        });
+
+        const text = L.join('\n');
+        let copiat = false;
+        try { if (typeof GM_setClipboard === 'function') { GM_setClipboard(text, { type: 'text', mimetype: 'text/plain' }); copiat = true; } } catch (e) {}
+        return { text, copiat };
+    }
+
     // ── Istoric facturi ───────────────────────────────────────────────────────
 
     function parseazaNumeFisier(filename) {
@@ -818,7 +870,10 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         div.innerHTML = `
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;border-bottom:1px solid #6a8a4a;padding-bottom:6px;">
                 <span style="font-weight:bold;font-size:14px;">${titlu}</span>
-                <button id="ia-btn-istoric" style="padding:3px 8px;background:#2d4a1a;border:1px solid #6a8a4a;border-radius:4px;color:#c8e6c9;font-size:11px;cursor:pointer;">📋 Istoric</button>
+                <div style="display:flex;gap:4px;">
+                    <button id="ia-btn-debug" title="Copiaza un raport (selectori + HTML) pentru depanare" style="padding:3px 8px;background:#37474f;border:1px solid #607d8b;border-radius:4px;color:#cfd8dc;font-size:11px;cursor:pointer;">🐞 Debug</button>
+                    <button id="ia-btn-istoric" style="padding:3px 8px;background:#2d4a1a;border:1px solid #6a8a4a;border-radius:4px;color:#c8e6c9;font-size:11px;cursor:pointer;">📋 Istoric</button>
+                </div>
             </div>
             <div id="ia-factura-info" style="display:none;font-size:11px;color:#80cbc4;margin-bottom:8px;padding:4px 6px;background:#2d4a1a;border-radius:4px;"></div>
             <label style="display:block;margin-bottom:6px;font-size:12px;color:#c8e6c9;">
@@ -1216,6 +1271,27 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         document.getElementById('ia-btn-istoric').addEventListener('click', () => {
             const el = document.getElementById('ia-istoric');
             el.style.display = el.style.display === 'none' ? 'block' : 'none';
+        });
+
+        document.getElementById('ia-btn-debug').addEventListener('click', () => {
+            const r = debugRaport();
+            const status = document.getElementById('ia-status');
+            if (r.copiat) {
+                status.textContent = '🐞 Debug copiat in clipboard — lipeste-l la Claude (Ctrl+V).';
+            } else {
+                // fallback: arata textul intr-o casuta de unde copiezi manual
+                let ta = document.getElementById('ia-debug-ta');
+                if (!ta) {
+                    ta = document.createElement('textarea');
+                    ta.id = 'ia-debug-ta';
+                    ta.style.cssText = 'width:100%;height:120px;margin-top:6px;font-size:10px;';
+                    document.getElementById('ia-status').after(ta);
+                }
+                ta.value = r.text;
+                ta.style.display = 'block';
+                ta.focus(); ta.select();
+                status.textContent = '🐞 Copiaza tot din casuta de mai jos (Ctrl+A, Ctrl+C) si lipeste la Claude.';
+            }
         });
 
         document.getElementById('ia-file').addEventListener('change', function (e) {

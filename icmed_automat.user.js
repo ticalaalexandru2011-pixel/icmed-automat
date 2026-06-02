@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.11
+// @version      1.12
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -42,6 +42,9 @@
         foldere:        'icmed-automat-folders',
         idxMed:         'icmed-automat-med-idx',
         idxMat:         'icmed-automat-mat-idx',
+        folderQueue:    'icmed-automat-folder-queue',   // coada de facturi din folder (supravietuieste reload-ului)
+        folderSel:      'icmed-automat-folder-sel',      // indexul facturii selectate
+        antetDone:      'icmed-automat-antet-done',       // marcaj: antet (Factura+Nota) introdus per factura+pagina
     };
 
     // Timpi (ms). T_POPUP e o LIMITA pentru `asteapta()` (revine mai devreme cand apare elementul);
@@ -600,6 +603,63 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         await salveazaPopup();
     }
 
+    // ── Stare antet: stim daca factura+nota au fost deja introduse ─────────────
+
+    function cheieAntet(antet) {
+        if (!antet) return '';
+        return (antet.serie + antet.numar) || antet.nrDoc || '';
+    }
+    function getAntetDone() {
+        try { return JSON.parse(localStorage.getItem(KEYS.antetDone) || '{}'); } catch (e) { return {}; }
+    }
+    function marcheazaAntetDone(antet) {
+        const d = getAntetDone();
+        d[cheieAntet(antet) + '_' + PAGINA] = true;
+        localStorage.setItem(KEYS.antetDone, JSON.stringify(d));
+    }
+    function antetEsteDone(antet) {
+        return !!getAntetDone()[cheieAntet(antet) + '_' + PAGINA];
+    }
+    // Detectie reala: campul "Factura/Proces" din pagina e completat?
+    function facturaPrezentaInPagina() {
+        const inp = inputLangaLabel('Factura/Proces');
+        return !!(inp && inp.value.trim());
+    }
+
+    // Actualizeaza textul/culoarea butonului de antet in functie de starea (introdus sau nu)
+    function actualizeazaButonAntet() {
+        const btn = document.getElementById('ia-btn-antet');
+        if (!btn) return;
+        if (!antetCurent) { btn.style.display = 'none'; return; }
+        btn.style.display = 'block';
+        btn.disabled = false;
+        if (antetEsteDone(antetCurent) || facturaPrezentaInPagina()) {
+            btn.style.background = '#2e7d32';
+            btn.textContent = '✅ Antet introdus (click = reintroduce)';
+        } else {
+            btn.style.background = '#8e24aa';
+            btn.textContent = '📋 Completeaza Factura + Nota';
+        }
+    }
+
+    // Persistenta coada de facturi din folder (ca sa supravietuiasca schimbarii de pagina)
+    function salveazaCoada() {
+        try { localStorage.setItem(KEYS.folderQueue, JSON.stringify(facturiIncarcate)); }
+        catch (e) { try { localStorage.removeItem(KEYS.folderQueue); } catch (e2) {} }
+    }
+    function rebuildDropdownFacturi(selIdx) {
+        const sel = document.getElementById('ia-factura-select');
+        if (!sel) return;
+        if (!facturiIncarcate.length) { sel.style.display = 'none'; return; }
+        sel.innerHTML = '<option value="">— alege factura —</option>' + facturiIncarcate.map((f, i) => {
+            const et = f.antet ? `${f.antet.furnizor} ${f.antet.nrDoc}` : (f.numeProduse || `factura ${i + 1}`);
+            const warn = f.antet && !f.produseText ? ' ⚠ fara produse' : '';
+            return `<option value="${i}">${esc(et)}${warn}</option>`;
+        }).join('');
+        sel.style.display = 'block';
+        if (selIdx != null && facturiIncarcate[selIdx]) sel.value = String(selIdx);
+    }
+
     // ── Debug: auto-test selectori + HTML, copiat in clipboard ────────────────
 
     function elInfo(el) {
@@ -966,6 +1026,7 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         document.getElementById('ia-btn-fill').textContent = 'Completeaza campurile';
         document.getElementById('ia-btn-next').style.display = 'none';
         document.getElementById('ia-fill-msg').style.display = 'none';
+        actualizeazaButonAntet();
     }
 
     // Apelata cand s-a terminat lista: marcheaza pagina completa si ascunde controalele de produs.
@@ -1192,6 +1253,19 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
             proceseazaXML(xmlSalvat, true, infoAuto);
         }
 
+        // Restaureaza coada de facturi + selectia (supravietuieste schimbarii de pagina)
+        try {
+            const q = JSON.parse(localStorage.getItem(KEYS.folderQueue) || 'null');
+            if (Array.isArray(q) && q.length) {
+                facturiIncarcate = q;
+                const selStr = localStorage.getItem(KEYS.folderSel);
+                const selIdx = selStr !== null ? parseInt(selStr, 10) : null;
+                rebuildDropdownFacturi(selIdx);
+                if (selIdx != null && facturiIncarcate[selIdx]) antetCurent = facturiIncarcate[selIdx].antet;
+            }
+        } catch (e) { /* ignoram */ }
+        actualizeazaButonAntet();
+
         document.getElementById('ia-istoric-lista').addEventListener('click', e => {
             const btnGata = e.target.closest('[data-gata]');
             if (btnGata) {
@@ -1350,26 +1424,18 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
                 if (!pf.folosit) facturiIncarcate.push({ antet: null, produseText: pf.text, numeProduse: pf.name });
             }
 
-            const sel = document.getElementById('ia-factura-select');
-            sel.innerHTML = '<option value="">— alege factura —</option>' + facturiIncarcate.map((f, i) => {
-                const et = f.antet ? `${f.antet.furnizor} ${f.antet.nrDoc}` : (f.numeProduse || `factura ${i + 1}`);
-                const warn = f.antet && !f.produseText ? ' ⚠ fara produse' : '';
-                return `<option value="${i}">${esc(et)}${warn}</option>`;
-            }).join('');
-            sel.style.display = 'block';
+            localStorage.removeItem(KEYS.folderSel); // resetam selectia la incarcare noua
+            salveazaCoada();
+            rebuildDropdownFacturi(null);
             status.textContent = `${facturiIncarcate.length} facturi gasite. Alege una din lista.`;
         });
 
-        document.getElementById('ia-factura-select').addEventListener('change', function (e) {
-            const i = parseInt(e.target.value, 10);
+        function selecteazaFacturaDinCoada(i, proceseaza) {
             const f = facturiIncarcate[i];
-            const btnAntet = document.getElementById('ia-btn-antet');
-            if (!f) { antetCurent = null; btnAntet.style.display = 'none'; return; }
+            if (!f) { antetCurent = null; actualizeazaButonAntet(); return; }
             antetCurent = f.antet;
-            btnAntet.style.display = f.antet ? 'block' : 'none';
-            btnAntet.disabled = false;
-            btnAntet.textContent = '📋 Completeaza Factura + Nota';
-            if (f.produseText) {
+            localStorage.setItem(KEYS.folderSel, String(i));
+            if (proceseaza && f.produseText) {
                 const info = f.antet
                     ? { firma: f.antet.furnizor, serie: f.antet.serie, nr: f.antet.numar, cheie: (f.antet.serie + f.antet.numar) || f.antet.nrDoc, filename: f.antet.nrDoc }
                     : (f.numeProduse ? parseazaNumeFisier(f.numeProduse) : null);
@@ -1381,11 +1447,23 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
                 autoCompletat = false;
                 proceseazaXML(f.produseText, false, info);
             }
+            actualizeazaButonAntet();
+        }
+
+        document.getElementById('ia-factura-select').addEventListener('change', function (e) {
+            const i = parseInt(e.target.value, 10);
+            if (!Number.isInteger(i)) { antetCurent = null; actualizeazaButonAntet(); return; }
+            selecteazaFacturaDinCoada(i, true);
         });
 
         document.getElementById('ia-btn-antet').addEventListener('click', async function () {
             if (!antetCurent) return;
             const btn = this;
+            // daca pare deja introdus, cerem confirmare inainte de a reintroduce
+            if ((antetEsteDone(antetCurent) || facturaPrezentaInPagina()) &&
+                !window.confirm('Antetul (Factura + Nota) pare deja introdus pentru aceasta factura. Il reintroduci?')) {
+                return;
+            }
             btn.disabled = true;
             btn.textContent = 'Se completeaza Factura…';
             try {
@@ -1393,7 +1471,10 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
                 btn.textContent = 'Se completeaza Nota…';
                 await sleep(500);
                 await completeazaNota(antetCurent);
-                btn.textContent = '✅ Antet completat — verifica, apoi treci la produse';
+                marcheazaAntetDone(antetCurent);
+                btn.style.background = '#2e7d32';
+                btn.textContent = '✅ Antet introdus — verifica, apoi treci la produse';
+                btn.disabled = false;
             } catch (err) {
                 btn.textContent = '⚠ ' + (err.message || 'eroare') + ' — incearca manual';
                 btn.disabled = false;

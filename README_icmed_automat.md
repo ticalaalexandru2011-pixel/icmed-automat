@@ -1,4 +1,4 @@
-# iCmed Automat - Alimentare Stoc (v1.5)
+# iCmed Automat - Alimentare Stoc (v1.6)
 
 Script Tampermonkey care completeaza automat formularul "Alimentare stoc medicamente" / "Alimentare stoc materiale"
 din iCmed, pe baza unui fisier XML exportat din SAGA.
@@ -11,14 +11,22 @@ din iCmed, pe baza unui fisier XML exportat din SAGA.
 - Chrome: https://chrome.google.com/webstore/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo
 - Edge: https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd
 
-### 2. Adauga scriptul
+### 2. Adauga scriptul (recomandat: instalare cu auto-update)
+
+Deschide acest link in browser-ul cu Tampermonkey instalat — se va deschide direct fereastra de instalare:
+
+https://raw.githubusercontent.com/ticalaalexandru2011-pixel/icmed-automat/main/icmed_automat.user.js
+
+Click **Install**. Gata.
+
+**Auto-update:** scriptul are `@updateURL`/`@downloadURL` setate, deci Tampermonkey verifica singur versiunea si se actualizeaza automat de pe GitHub cand creste `@version`. Nu mai trebuie sa copiezi nimic manual.
+
+### Instalare manuala (alternativa)
 1. Click iconita Tampermonkey din bara browser-ului -> Dashboard
 2. Click + (New script)
 3. Sterge tot ce e acolo
 4. Copiaza continutul fisierului `icmed_automat.user.js`
 5. Lipeste -> Ctrl+S
-
-**Important:** Dupa orice modificare a scriptului, copiaza din nou continutul in Tampermonkey si salveaza.
 
 ---
 

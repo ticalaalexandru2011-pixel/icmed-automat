@@ -1,4 +1,4 @@
-# iCmed Automat - Alimentare Stoc (v1.6)
+# iCmed Automat - Alimentare Stoc (v1.7)
 
 Script Tampermonkey care completeaza automat formularul "Alimentare stoc medicamente" / "Alimentare stoc materiale"
 din iCmed, pe baza unui fisier XML exportat din SAGA.
@@ -299,7 +299,7 @@ Pret/bucata  = valoare / total_bucati (4 zecimale, separator virgula)
 | `icmed-automat-med-idx`        | Pozitia curenta pe pagina medicamente             |
 | `icmed-automat-mat-idx`        | Pozitia curenta pe pagina materiale               |
 | `icmed-automat-factura-curenta`| Obiectul info al facturii curente (firma/serie/nr)|
-| `icmed-automat-istoric`        | Array cu toate facturile procesate (max afisat 15)|
+| `icmed-automat-istoric`        | Array cu toate facturile procesate (organizate pe foldere) |
 | `icmed-automat-extra-materiale`| Produse cu W rutate manual catre materiale        |
 | `icmed-automat-folders`        | Array foldere personalizate din istoric           |
 

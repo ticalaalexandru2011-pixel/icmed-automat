@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.6
+// @version      1.7
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -24,6 +24,29 @@
     if (!PAGINA) return;
 
     const LS_KEY = `icmed-automat-${PAGINA}-idx`;
+
+    // ── Constante ─────────────────────────────────────────────────────────────
+
+    // Chei localStorage (centralizate ca sa nu apara string-uri magice prin cod)
+    const KEYS = {
+        xml:            'icmed-automat-xml',
+        xmlFilename:    'icmed-automat-xml-filename',
+        facturaCurenta: 'icmed-automat-factura-curenta',
+        istoric:        'icmed-automat-istoric',
+        extraMateriale: 'icmed-automat-extra-materiale',
+        foldere:        'icmed-automat-folders',
+        idxMed:         'icmed-automat-med-idx',
+        idxMat:         'icmed-automat-mat-idx',
+    };
+
+    // Timpi (ms). T_POPUP e o LIMITA pentru `asteapta()` (revine mai devreme cand apare elementul);
+    // restul sunt asteptari fixe acolo unde nu exista un semnal clar de "gata".
+    const T_POPUP  = 4000;  // limita pentru deschiderea popup-ului de cautare
+    const T_TYPE   = 500;   // dupa scrierea codului, inainte de Enter
+    const T_FILTER = 1500;  // dupa Enter, cat asteptam filtrarea rezultatelor (fara semnal clar)
+    const T_RECALC = 700;   // recalculul paginii dupa setarea pretului
+    const T_SAVE   = 1200;  // dupa click pe Salveaza
+    const T_CLICK  = 600;   // dupa click pe un rand din rezultate
 
     // ── Parsare XML ───────────────────────────────────────────────────────────
 
@@ -65,9 +88,9 @@
         if (!denumire) return 1;
         const U = '(FI(?:OLE)?|FL(?:ACOANE)?|CP(?:S|SULE|\\.[\\w.]*)?|CPS|CAPS(?:ULE)?|TB|DR(?:AJEURI)?|COMP(?:RIMATE)?|PLIC|SUPOZ|AMP)';
         let m = denumire.match(new RegExp('X\\s*(\\d+)\\s*' + U, 'i'));
-        if (m) return parseInt(m[1]);
+        if (m) return parseInt(m[1], 10);
         m = denumire.match(new RegExp('\\b(\\d+)\\s*' + U, 'i'));
-        if (m) return parseInt(m[1]);
+        if (m) return parseInt(m[1], 10);
         return null;
     }
 
@@ -85,7 +108,7 @@
             const cantitate = parseFloat(g('cantitate')) || 0;
             const valoare   = parseFloat(g('valoare'))   || 0;
             const totalXml  = parseFloat(g('total'))     || 0;
-            const tvaArt    = parseInt(g('tva_art'))    || 0;
+            const tvaArt    = parseInt(g('tva_art'), 10) || 0;
             // Daca TVA > 0 si exista <total>, bagam TVA in pret si punem 0 in formular
             const pretBaza  = tvaArt > 0 && totalXml > 0 ? totalXml : valoare;
             const tva       = '0';
@@ -153,7 +176,77 @@
         );
     }
 
+    // Trimite Enter (keydown + keyup) catre un element — folosit pentru a declansa
+    // recalculul/validarea campurilor din formularul iCmed.
+    function trimiteEnter(el) {
+        el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
+        el.dispatchEvent(new KeyboardEvent('keyup',   { key: 'Enter', keyCode: 13, bubbles: true }));
+    }
+
+    // Escapeaza text pentru inserare in innerHTML (denumiri/firme din XML pot contine & < > ")
+    const esc = s => String(s ?? '').replace(/[&<>"]/g, c =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
     const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+    // Asteapta pana cand `fn()` intoarce o valoare truthy (max `timeout` ms), verificand din `pas` in `pas`.
+    // Inlocuieste sleep-urile fixe: revine imediat ce elementul apare, deci e si rapid si robust.
+    async function asteapta(fn, timeout = 4000, pas = 100) {
+        const limita = Date.now() + timeout;
+        while (Date.now() < limita) {
+            const rez = fn();
+            if (rez) return rez;
+            await sleep(pas);
+        }
+        return null;
+    }
+
+    // Gaseste primul <tr> al carui td/th/label incepe cu `text` (folosit la multe campuri din formular)
+    function gasesteRandDupaLabel(text) {
+        for (const el of document.querySelectorAll('td, th, label')) {
+            if (el.textContent.trim().replace(':', '').trim().startsWith(text)) {
+                return el.closest('tr');
+            }
+        }
+        return null;
+    }
+
+    // Inputurile vizibile (non-hidden) dintr-un rand
+    function inputuriVizibile(row) {
+        return [...row.querySelectorAll('input[type="text"], input:not([type])')]
+            .filter(e => e.offsetParent !== null && e.type !== 'hidden');
+    }
+
+    // Seteaza Pret unitar + Cota TVA (sunt in acelasi <tr>). Cu `doarDacaGol` recompleteaza
+    // doar campurile goale/gresite (folosit la verificare). Intoarce lista campurilor setate.
+    async function setarePretTva(row, prod, doarDacaGol) {
+        const setate = [];
+        if (!row) return setate;
+
+        let inputs = inputuriVizibile(row);
+        if (inputs[0] && (!doarDacaGol || !inputs[0].value.trim())) {
+            seteazaValoare(inputs[0], prod.pretBuc);
+            trimiteEnter(inputs[0]);
+            await sleep(T_RECALC); // pagina recalculeaza dupa Enter
+            setate.push('pret');
+        }
+
+        // Re-citim inputurile: pagina poate adauga/sterge campuri dupa recalcul
+        const inputsNoi = inputuriVizibile(row);
+        if (inputsNoi.length > 1) {
+            const tvaInp = inputsNoi[inputsNoi.length - 1];
+            const tinta = String(parseInt(prod.tva, 10));
+            if (!doarDacaGol || tvaInp.value.trim() !== tinta) {
+                tvaInp.focus();
+                tvaInp.select();
+                tvaInp.value = tinta;
+                ['input', 'change'].forEach(e => tvaInp.dispatchEvent(new Event(e, { bubbles: true })));
+                trimiteEnter(tvaInp);
+                setate.push('TVA');
+            }
+        }
+        return setate;
+    }
 
     async function inchideDialogAvertisment() {
         const panel = document.getElementById('icmed-panel');
@@ -195,34 +288,8 @@
             recompletate.push('cantitate');
         }
 
-        let pretTvaRow = null;
-        for (const el of document.querySelectorAll('td, th, label')) {
-            if (el.textContent.trim().replace(':', '').trim().startsWith('Pret unitar')) {
-                pretTvaRow = el.closest('tr'); break;
-            }
-        }
-        if (pretTvaRow) {
-            const inputs = [...pretTvaRow.querySelectorAll('input[type="text"], input:not([type])')].filter(e => e.offsetParent && e.type !== 'hidden');
-            if (inputs[0] && !inputs[0].value.trim()) {
-                seteazaValoare(inputs[0], prod.pretBuc);
-                inputs[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
-                inputs[0].dispatchEvent(new KeyboardEvent('keyup',   { key: 'Enter', keyCode: 13, bubbles: true }));
-                await sleep(700);
-                recompletate.push('pret');
-            }
-            const inputsNoi = [...pretTvaRow.querySelectorAll('input[type="text"], input:not([type])')].filter(e => e.offsetParent && e.type !== 'hidden');
-            if (inputsNoi.length > 1) {
-                const tvaInp = inputsNoi[inputsNoi.length - 1];
-                if (tvaInp.value.trim() !== String(parseInt(prod.tva))) {
-                    tvaInp.focus(); tvaInp.select();
-                    tvaInp.value = String(parseInt(prod.tva));
-                    ['input', 'change'].forEach(e => tvaInp.dispatchEvent(new Event(e, { bubbles: true })));
-                    tvaInp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
-                    tvaInp.dispatchEvent(new KeyboardEvent('keyup',   { key: 'Enter', keyCode: 13, bubbles: true }));
-                    recompletate.push('TVA');
-                }
-            }
-        }
+        const setate = await setarePretTva(gasesteRandDupaLabel('Pret unitar'), prod, true);
+        recompletate.push(...setate);
 
         return recompletate;
     }
@@ -230,8 +297,9 @@
     function gasestePopup() {
         const candidati = [...document.querySelectorAll('div, table')].filter(el => {
             if (!el.offsetParent) return false;
+            if (el.closest('#icmed-panel')) return false; // ignoram propriul panou
             const s = window.getComputedStyle(el);
-            const z = parseInt(s.zIndex) || 0;
+            const z = parseInt(s.zIndex, 10) || 0;
             return (z > 100 || s.position === 'fixed') && el.querySelector('input[type="text"], input:not([type])');
         });
         return candidati.sort((a, b) => b.contains(a) ? 1 : -1)[0] || null;
@@ -248,24 +316,24 @@
     }
 
     function getIstoric() {
-        return JSON.parse(localStorage.getItem('icmed-automat-istoric') || '[]');
+        return JSON.parse(localStorage.getItem(KEYS.istoric) || '[]');
     }
 
     function saveIstoric(list) {
-        localStorage.setItem('icmed-automat-istoric', JSON.stringify(list));
+        localStorage.setItem(KEYS.istoric, JSON.stringify(list));
     }
 
     function getFoldere() {
-        const saved = JSON.parse(localStorage.getItem('icmed-automat-folders') || '[]');
+        const saved = JSON.parse(localStorage.getItem(KEYS.foldere) || '[]');
         if (!saved.find(f => f.id === 'general')) saved.unshift({ id: 'general', nume: 'General' });
         return saved;
     }
     function saveFoldere(list) {
-        localStorage.setItem('icmed-automat-folders', JSON.stringify(list));
+        localStorage.setItem(KEYS.foldere, JSON.stringify(list));
     }
 
     function getFacturaCurenta() {
-        return JSON.parse(localStorage.getItem('icmed-automat-factura-curenta') || 'null');
+        return JSON.parse(localStorage.getItem(KEYS.facturaCurenta) || 'null');
     }
 
     function gasesteSauCreazaFactura(info, totalMed, totalMat) {
@@ -347,20 +415,20 @@
                 const progMed = `${f.procesatMed}/${f.totalMed} med`;
                 const progMat = f.totalMat > 0 ? ` · ${f.procesatMat}/${f.totalMat} mat` : '';
                 const btnGata = !f.completata
-                    ? `<button data-gata="${f.cheie}" style="margin-top:4px;width:calc(100% - 32px);padding:4px;background:#388e3c;border:none;border-radius:4px;color:#fff;font-size:11px;font-weight:bold;cursor:pointer;">✅ Marcheaza gata</button>`
+                    ? `<button data-gata="${esc(f.cheie)}" style="margin-top:4px;width:calc(100% - 32px);padding:4px;background:#388e3c;border:none;border-radius:4px;color:#fff;font-size:11px;font-weight:bold;cursor:pointer;">✅ Marcheaza gata</button>`
                     : '';
-                const selectMuta = `<select data-muta="${f.cheie}" style="font-size:10px;background:#2d4a1a;color:#c8e6c9;border:1px solid #4a6a3a;border-radius:3px;padding:1px 3px;margin-top:3px;width:100%;cursor:pointer;">
-                    ${foldere.map(fo => `<option value="${fo.id}"${(f.folderId||'general')===fo.id?' selected':''}>${fo.nume}</option>`).join('')}
+                const selectMuta = `<select data-muta="${esc(f.cheie)}" style="font-size:10px;background:#2d4a1a;color:#c8e6c9;border:1px solid #4a6a3a;border-radius:3px;padding:1px 3px;margin-top:3px;width:100%;cursor:pointer;">
+                    ${foldere.map(fo => `<option value="${esc(fo.id)}"${(f.folderId||'general')===fo.id?' selected':''}>${esc(fo.nume)}</option>`).join('')}
                 </select>`;
                 return `<div style="padding:5px 0;border-bottom:1px solid #3a5a2a;font-size:11px;line-height:1.5;">
                     <div style="display:flex;justify-content:space-between;align-items:flex-start;">
                         <div style="flex:1;min-width:0;">
                             <span style="font-size:13px;">${icon}</span>
-                            <b style="color:#fff;"> ${f.cheie}</b>
-                            <span style="color:#c8e6c9;"> ${f.firma}</span><br/>
-                            <span style="color:#9e9e9e;">${f.data} · ${progMed}${progMat}</span>
+                            <b style="color:#fff;"> ${esc(f.cheie)}</b>
+                            <span style="color:#c8e6c9;"> ${esc(f.firma)}</span><br/>
+                            <span style="color:#9e9e9e;">${esc(f.data)} · ${progMed}${progMat}</span>
                         </div>
-                        <button data-sterge="${f.cheie}" style="padding:2px 6px;background:#b71c1c;border:none;border-radius:3px;color:#fff;font-size:11px;cursor:pointer;flex-shrink:0;margin-left:6px;">🗑</button>
+                        <button data-sterge="${esc(f.cheie)}" style="padding:2px 6px;background:#b71c1c;border:none;border-radius:3px;color:#fff;font-size:11px;cursor:pointer;flex-shrink:0;margin-left:6px;">🗑</button>
                     </div>
                     ${selectMuta}
                     ${btnGata}
@@ -376,7 +444,7 @@
                                font-size:11px;font-weight:bold;color:#c8e6c9;outline:none;
                                display:flex;justify-content:space-between;align-items:center;
                                list-style:none;-webkit-appearance:none;">
-                    <span>📁 ${folder.nume}</span>
+                    <span>📁 ${esc(folder.nume)}</span>
                     <span style="color:#9e9e9e;font-weight:normal;font-size:10px;">${nrComplete}/${facturiFoldera.length} ✅</span>
                 </summary>
                 <div style="padding:4px 0 0 6px;">${actiuniHtml}${facturiHtml}${emptyMsg}</div>
@@ -396,7 +464,7 @@
         el.style.display = 'block';
         el.innerHTML = `
             <span style="color:#9e9e9e;font-size:10px;">Factura:</span>
-            <input id="ia-factura-edit" type="text" value="${label.replace(/"/g, '&quot;')}"
+            <input id="ia-factura-edit" type="text" value="${esc(label)}"
                 style="background:transparent;border:none;border-bottom:1px dashed #6a8a4a;
                        color:#80cbc4;font-size:11px;width:calc(100% - 68px);outline:none;
                        margin-left:4px;padding:1px 2px;"/>
@@ -425,8 +493,8 @@
         fc.nr    = info.nr;
         fc.cheie = info.cheie;
 
-        localStorage.setItem('icmed-automat-factura-curenta', JSON.stringify(fc));
-        localStorage.setItem('icmed-automat-xml-filename', numeNou + '.xml');
+        localStorage.setItem(KEYS.facturaCurenta, JSON.stringify(fc));
+        localStorage.setItem(KEYS.xmlFilename, numeNou + '.xml');
 
         const istoric = getIstoric();
         const f = istoric.find(x => x.cheie === cheieVeche);
@@ -513,16 +581,16 @@
         document.getElementById('ia-status').textContent = `Produs ${i + 1} din ${lista.length}`;
         document.getElementById('ia-card').style.display = 'block';
         const codLinie = PAGINA === 'med'
-            ? `<span style="color:#80cbc4;">W:</span> ${p.w}<br/>`
-            : `<span style="color:#80cbc4;">Cod:</span> ${p.cod || '—'}<br/>`;
+            ? `<span style="color:#80cbc4;">W:</span> ${esc(p.w)}<br/>`
+            : `<span style="color:#80cbc4;">Cod:</span> ${esc(p.cod) || '—'}<br/>`;
         const avertBuc = !p.bucCutieDetectat
             ? `<div style="margin-top:6px;padding:5px 7px;background:#b71c1c;border-radius:4px;color:#fff;font-size:11px;font-weight:bold;">⚠ Buc/cutie nedetectate — verifica cantitatea!</div>`
             : '';
         document.getElementById('ia-card').innerHTML = `
-            <b>${p.denumire}</b><br/>
+            <b>${esc(p.denumire)}</b><br/>
             ${codLinie}
-            <span style="color:#80cbc4;">Lot:</span> ${p.lotNr || '—'}<br/>
-            <span style="color:#80cbc4;">Exp:</span> ${p.bbdData || '—'}<br/>
+            <span style="color:#80cbc4;">Lot:</span> ${esc(p.lotNr) || '—'}<br/>
+            <span style="color:#80cbc4;">Exp:</span> ${esc(p.bbdData) || '—'}<br/>
             <span style="color:#80cbc4;">Cant:</span> ${p.totalBuc} buc (${p.bucCutie} buc/cutie x ${p.cantitate} cutii)<br/>
             <span style="color:#80cbc4;">Pret/buc:</span> ${p.pretBuc} lei<br/>
             <span style="color:#80cbc4;">TVA:</span> ${p.tva}%
@@ -542,6 +610,17 @@
         document.getElementById('ia-fill-msg').style.display = 'none';
     }
 
+    // Apelata cand s-a terminat lista: marcheaza pagina completa si ascunde controalele de produs.
+    function finalizeazaLista() {
+        marcheazaPaginaCompleta();
+        localStorage.removeItem(LS_KEY);
+        document.getElementById('ia-status').textContent = 'Toate produsele procesate! ✅';
+        document.getElementById('ia-card').style.display = 'none';
+        document.getElementById('ia-btn-fill').style.display = 'none';
+        document.getElementById('ia-btn-next').style.display = 'none';
+        document.getElementById('ia-fill-msg').style.display = 'none';
+    }
+
     // ── Avertisment produs negasit ────────────────────────────────────────────
 
     async function aratareAvertisment(prod) {
@@ -550,7 +629,7 @@
             fillMsg.style.display = 'block';
             fillMsg.innerHTML = `
                 <div style="color:#ff8a65;font-weight:bold;margin-bottom:6px;">Produsul nu a fost gasit in iCmed!</div>
-                <div style="color:#fff;font-size:11px;margin-bottom:8px;">${prod.denumire}<br/>W: ${prod.w}</div>
+                <div style="color:#fff;font-size:11px;margin-bottom:8px;">${esc(prod.denumire)}<br/>W: ${esc(prod.w)}</div>
                 <button id="ia-warn-mat" style="width:100%;padding:6px;background:#ff8f00;border:none;border-radius:4px;color:#fff;font-weight:bold;cursor:pointer;font-size:12px;margin-bottom:4px;">Trimite la Materiale</button>
                 <button id="ia-warn-man" style="width:100%;padding:6px;background:#546e7a;border:none;border-radius:4px;color:#fff;font-weight:bold;cursor:pointer;font-size:12px;">Continua manual</button>
             `;
@@ -573,13 +652,7 @@
         const codCautare  = PAGINA === 'med' ? prod.w
             : (prod.denumire.split(' ').find(w => /[a-zA-Z]/.test(w)) || prod.denumire.split(' ')[0]);
 
-        let campRow = null;
-        for (const el of document.querySelectorAll('td, th, label')) {
-            if (el.textContent.trim().replace(':', '').trim().startsWith(labelCamp)) {
-                campRow = el.closest('tr');
-                break;
-            }
-        }
+        const campRow = gasesteRandDupaLabel(labelCamp);
 
         if (campRow) {
             const butoane = [...campRow.querySelectorAll('img, input[type="image"], button, a')].filter(el => {
@@ -590,28 +663,27 @@
             const openBtn = butoane[0];
             if (openBtn) {
                 openBtn.click();
-                await sleep(1200);
 
-                const popup = gasestePopup();
-                const searchInput = popup
-                    ? popup.querySelector('input[type="text"], input:not([type])')
-                    : null;
+                // Asteptam pana popup-ul are un input de cautare (in loc de delay fix)
+                const searchInput = await asteapta(() => {
+                    const p = gasestePopup();
+                    return p ? p.querySelector('input[type="text"], input:not([type])') : null;
+                }, T_POPUP);
 
                 if (searchInput) {
                     searchInput.focus();
                     searchInput.value = codCautare;
                     searchInput.dispatchEvent(new Event('input',  { bubbles: true }));
                     searchInput.dispatchEvent(new Event('change', { bubbles: true }));
-                    await sleep(500);
-                    searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
-                    searchInput.dispatchEvent(new KeyboardEvent('keyup',   { key: 'Enter', keyCode: 13, bubbles: true }));
-                    await sleep(1500);
+                    await sleep(T_TYPE);
+                    trimiteEnter(searchInput);
+                    await sleep(T_FILTER); // lasam pagina sa filtreze (nu exista semnal clar de "gata")
 
                     const popup2 = gasestePopup();
                     if (popup2) {
                         const rows = [...popup2.querySelectorAll('tr')].filter(r => r.cells.length > 1 && r.offsetParent);
                         const primaLinie = rows.find(r => r.closest('tbody')) || rows[0];
-                        if (primaLinie) { primaLinie.click(); await sleep(600); }
+                        if (primaLinie) { primaLinie.click(); await sleep(T_CLICK); }
                     }
                 }
             }
@@ -625,21 +697,16 @@
                 btnFill.textContent = 'Completeaza campurile';
                 btnFill.disabled = false;
                 if (choice === 'materiale') {
-                    const extras = JSON.parse(localStorage.getItem('icmed-automat-extra-materiale') || '[]');
+                    const extras = JSON.parse(localStorage.getItem(KEYS.extraMateriale) || '[]');
                     extras.push(prod);
-                    localStorage.setItem('icmed-automat-extra-materiale', JSON.stringify(extras));
+                    localStorage.setItem(KEYS.extraMateriale, JSON.stringify(extras));
                     idx++;
                     localStorage.setItem(LS_KEY, idx);
                     if (idx < lista.length) {
                         document.getElementById('ia-jump-nr').value = idx + 1;
                         afiseaza(idx);
                     } else {
-                        marcheazaPaginaCompleta();
-                        localStorage.removeItem(LS_KEY);
-                        document.getElementById('ia-status').textContent = 'Toate produsele procesate! ✅';
-                        document.getElementById('ia-card').style.display = 'none';
-                        document.getElementById('ia-btn-fill').style.display = 'none';
-                        document.getElementById('ia-btn-next').style.display = 'none';
+                        finalizeazaLista();
                     }
                 }
                 return;
@@ -670,33 +737,7 @@
         await sleep(150);
 
         // Pret unitar + Cota TVA - ambele in acelasi rand
-        let pretTvaRow = null;
-        for (const el of document.querySelectorAll('td, th, label')) {
-            if (el.textContent.trim().replace(':', '').trim().startsWith('Pret unitar')) {
-                pretTvaRow = el.closest('tr');
-                break;
-            }
-        }
-        if (pretTvaRow) {
-            const inputs = [...pretTvaRow.querySelectorAll('input[type="text"], input:not([type])')].filter(el => el.offsetParent !== null && el.type !== 'hidden');
-            if (inputs[0]) {
-                seteazaValoare(inputs[0], prod.pretBuc);
-                inputs[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
-                inputs[0].dispatchEvent(new KeyboardEvent('keyup',   { key: 'Enter', keyCode: 13, bubbles: true }));
-            }
-            await sleep(700);
-            const inputsNoi = [...pretTvaRow.querySelectorAll('input[type="text"], input:not([type])')].filter(el => el.offsetParent !== null && el.type !== 'hidden');
-            if (inputsNoi.length > 1) {
-                const tvaInput = inputsNoi[inputsNoi.length - 1];
-                tvaInput.focus();
-                tvaInput.select();
-                tvaInput.value = String(parseInt(prod.tva));
-                tvaInput.dispatchEvent(new Event('input',  { bubbles: true }));
-                tvaInput.dispatchEvent(new Event('change', { bubbles: true }));
-                tvaInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
-                tvaInput.dispatchEvent(new KeyboardEvent('keyup',   { key: 'Enter', keyCode: 13, bubbles: true }));
-            }
-        }
+        await setarePretTva(gasesteRandDupaLabel('Pret unitar'), prod, false);
         await sleep(150);
 
         const recompletate = await verificaSiRecompletat(prod);
@@ -717,7 +758,7 @@
 
     function proceseazaXML(xmlText, autoIncarcat, infoFactura) {
         const result  = parseazaXML(xmlText);
-        const extras  = JSON.parse(localStorage.getItem('icmed-automat-extra-materiale') || '[]')
+        const extras  = JSON.parse(localStorage.getItem(KEYS.extraMateriale) || '[]')
             .map(p => ({
                 bucCutieDetectat: false,
                 ...p,
@@ -729,7 +770,7 @@
         const fc = infoFactura || getFacturaCurenta();
         if (fc) {
             gasesteSauCreazaFactura(fc, result.produse.length, result.sarite.length + extras.length);
-            localStorage.setItem('icmed-automat-factura-curenta', JSON.stringify(fc));
+            localStorage.setItem(KEYS.facturaCurenta, JSON.stringify(fc));
         }
 
         afiseazaInfoFactura();
@@ -738,7 +779,7 @@
         if (PAGINA === 'med' && result.sarite.length) {
             const el = document.getElementById('ia-sarite');
             el.style.display = 'block';
-            el.innerHTML = '<b>Fara cod W (pe Alim. stoc materiale):</b><br/>' + result.sarite.map(d => `• ${d.denumire}`).join('<br/>');
+            el.innerHTML = '<b>Fara cod W (pe Alim. stoc materiale):</b><br/>' + result.sarite.map(d => `• ${esc(d.denumire)}`).join('<br/>');
         }
 
         if (lista.length > 0) {
@@ -747,7 +788,7 @@
             document.getElementById('ia-jump-nr').max = lista.length;
 
             const salvat    = localStorage.getItem(LS_KEY);
-            const idxSalvat = salvat !== null ? parseInt(salvat) : 0;
+            const idxSalvat = salvat !== null ? parseInt(salvat, 10) : 0;
             idx = Math.max(0, Math.min(idxSalvat, lista.length - 1));
             document.getElementById('ia-jump-nr').value = idx + 1;
             afiseaza(idx);
@@ -767,9 +808,9 @@
         creeazaPanel();
         afiseazaIstoric();
 
-        const xmlSalvat = localStorage.getItem('icmed-automat-xml');
+        const xmlSalvat = localStorage.getItem(KEYS.xml);
         if (xmlSalvat) {
-            const filenameSalvat = localStorage.getItem('icmed-automat-xml-filename');
+            const filenameSalvat = localStorage.getItem(KEYS.xmlFilename);
             const infoAuto = filenameSalvat ? parseazaNumeFisier(filenameSalvat) : null;
             proceseazaXML(xmlSalvat, true, infoAuto);
         }
@@ -861,11 +902,11 @@
             const reader = new FileReader();
             reader.onload = ev => {
                 const infoFactura = parseazaNumeFisier(file.name);
-                localStorage.setItem('icmed-automat-xml', ev.target.result);
-                localStorage.setItem('icmed-automat-xml-filename', file.name);
-                localStorage.removeItem('icmed-automat-extra-materiale');
-                localStorage.removeItem('icmed-automat-med-idx');
-                localStorage.removeItem('icmed-automat-mat-idx');
+                localStorage.setItem(KEYS.xml, ev.target.result);
+                localStorage.setItem(KEYS.xmlFilename, file.name);
+                localStorage.removeItem(KEYS.extraMateriale);
+                localStorage.removeItem(KEYS.idxMed);
+                localStorage.removeItem(KEYS.idxMat);
                 autoCompletat = false;
                 proceseazaXML(ev.target.result, false, infoFactura);
             };
@@ -873,7 +914,7 @@
         });
 
         document.getElementById('ia-btn-jump').addEventListener('click', () => {
-            const nr = parseInt(document.getElementById('ia-jump-nr').value) || 1;
+            const nr = parseInt(document.getElementById('ia-jump-nr').value, 10) || 1;
             idx = Math.max(0, Math.min(nr - 1, lista.length - 1));
             localStorage.setItem(LS_KEY, idx);
             autoCompletat = false;
@@ -881,7 +922,7 @@
         });
 
         function aplicaBucCutie() {
-            const nr = Math.max(1, parseInt(document.getElementById('ia-buc-nr').value) || 1);
+            const nr = Math.max(1, parseInt(document.getElementById('ia-buc-nr').value, 10) || 1);
             const prod = lista[idx];
             if (!prod.pretBaza && prod.pretBuc && prod.totalBuc) {
                 prod.pretBaza = parseFloat(prod.pretBuc.replace(',', '.')) * prod.totalBuc;
@@ -911,7 +952,7 @@
                 });
             if (btnSalveaza) {
                 btnSalveaza.click();
-                await sleep(1200);
+                await sleep(T_SAVE);
                 await inchideDialogAvertisment();
             }
             marcheazaAvans();
@@ -928,13 +969,7 @@
                     }
                 }
             } else {
-                marcheazaPaginaCompleta();
-                localStorage.removeItem(LS_KEY);
-                document.getElementById('ia-status').textContent = 'Toate produsele procesate! ✅';
-                document.getElementById('ia-card').style.display = 'none';
-                document.getElementById('ia-btn-fill').style.display = 'none';
-                document.getElementById('ia-btn-next').style.display = 'none';
-                document.getElementById('ia-fill-msg').style.display = 'none';
+                finalizeazaLista();
             }
         });
     }

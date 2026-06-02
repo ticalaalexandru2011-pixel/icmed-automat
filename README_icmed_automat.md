@@ -1,4 +1,4 @@
-# iCmed Automat - Alimentare Stoc (v1.8)
+# iCmed Automat - Alimentare Stoc (v1.9)
 
 Script Tampermonkey care completeaza automat formularul "Alimentare stoc medicamente" / "Alimentare stoc materiale"
 din iCmed, pe baza unui fisier XML exportat din SAGA.
@@ -38,6 +38,50 @@ Scriptul apare **doar** pe paginile relevante:
 |---------------------------|----------------------------|-----------------------------|
 | Alim. stoc medicamente    | "iCmed Automat — Medicamente" (verde) | Produse cu cod W din XML |
 | Alim. stoc materiale      | "iCmed Automat — Materiale" (verde)   | Produse fara cod W + extras rutate manual |
+
+---
+
+## Incarcare folder + completare antet (Factura + Nota receptie) — v1.9
+
+Pe langa incarcarea unui singur fisier, poti incarca **un folder intreg de XML-uri** si scriptul completeaza automat si **antetul** (factura + nota receptie), nu doar produsele.
+
+### Cum functioneaza
+
+Unii furnizori (SAGA) exporta **2 fisiere XML per factura**:
+- unul cu **antetul** (furnizor, CUI, serie/nr, data, valori) — are `<cod_fiscal>` / `<nr_doc>`
+- unul cu **produsele** (liniile)
+
+Pasi:
+1. In panou, la "…sau incarca un folder intreg de XML-uri", **selectezi folderul** cu toate fisierele (le poti arunca pe toate gramada, fara subfoldere)
+2. Scriptul **imperecheaza automat** antetul cu produsele, dupa **total** (suma liniilor = totalul din antet; daca sunt mai multe potriviri, alege dupa apropierea in timp din numele fisierului)
+3. Apare un **dropdown cu facturile** gasite — alegi una
+4. Se incarca produsele ei (ca la fisier) si apare butonul **"📋 Completeaza Factura + Nota"**
+5. Apesi butonul -> scriptul:
+   - deschide popup-ul **Factura** (➕), cauta **furnizorul dupa CUI**, completeaza Tip/Serie/Numar/Valori/Data, salveaza
+   - deschide popup-ul **Nota receptie** (➕), pune **urmatorul numar** (afisat + 1) si data, salveaza
+6. Verifici, apoi continui normal cu produsele
+
+### Regula de data
+
+Data facturii **nu** se pune ca atare. Se pune **prima zi a lunii** facturii:
+- factura `07.05.2026` -> in iCmed `01/05/2026`
+- factura `20.05.2026` -> in iCmed `01/05/2026`
+
+Se aplica la campul "Data" din factura si la data notei de receptie. "Data scadenta" ramane goala.
+
+### Numarul notei de receptie
+
+Se ia numarul afisat in popup si se pune **urmatorul** (60 -> 61). La procesarea mai multor facturi la rand, scriptul incrementeaza singur (61, 62, 63…) ca sa nu repete.
+
+### Furnizor
+
+Se cauta dupa **CUI** (`cod_fiscal` din XML, fara prefixul "RO") — potrivire sigura. Daca CUI-ul nu se gaseste, ramane sa selectezi tu furnizorul din lista.
+
+**Nota:** automatizarea popup-urilor (butoanele ➕, campurile, Salveaza) depinde de structura exacta a paginii. Daca ceva nu se completeaza/apasa corect, da F12 pe butonul/campul respectiv si trimite HTML-ul ca sa ajustam selectorul (la fel ca la popup-ul de medicamente).
+
+### Fisiere fara antet (format vechi)
+
+Daca in folder sunt fisiere de produse fara antet (formatul vechi `FIRMA SERIENR.xml`), apar si ele in lista si merg ca inainte (doar produse, fara completare antet).
 
 ---
 
@@ -248,9 +292,10 @@ Scriptul detecteaza automat formatul `text_supl` din XML:
 | SAGA standard    | `LOT:5R01586A`         | `BBD:2026-04-30`       | `CIM:W43285003`     |
 | UNICAFARM        | `LOT: 250787`          | `BBD: 30.04.2027`      | `CodCIM: W01704002` |
 | PHYTALFARMACIE   | `Lot: TRG1306,`        | `BBD: 2027-08-31,`     | `CodCIM: W08199003` |
+| MEDAZ / materiale| `Serie:20250815`       | `Exp:15.08.2030`       | *(absent)*          |
 | CRISFARM         | *(absent)*             | *(absent)*             | *(absent)*          |
 
-Regex-urile sunt case-insensitive (`/i`) si accepta spatiu optional dupa `:`.
+Regex-urile sunt case-insensitive (`/i`) si accepta spatiu optional dupa `:`. Lotul se ia din `LOT:` sau `Serie:`; expirarea din `BBD:` sau `Exp:` (acepta `DD.MM.YYYY` sau `YYYY-MM-DD`).
 
 ### CRISFARM — format special
 

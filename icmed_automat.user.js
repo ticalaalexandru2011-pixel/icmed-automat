@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.8
+// @version      1.9
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -76,17 +76,20 @@
 
     function lot(textSupl) {
         if (!textSupl) return '';
-        const m = textSupl.match(/LOT:\s*([^,\s]+)/i);
+        let m = textSupl.match(/LOT:\s*([^,\s]+)/i);
+        if (m) return m[1];
+        // Format alt furnizor: "10=Serie:20250815 Exp:..."
+        m = textSupl.match(/Serie:\s*([^,\s]+)/i);
         return m ? m[1] : '';
     }
 
     function bbd(textSupl) {
         if (!textSupl) return '';
-        // Format DD.MM.YYYY (ex: BBD: 30.04.2027)
-        let m = textSupl.match(/BBD:\s*(\d{2})\.(\d{2})\.(\d{4})/);
+        // Format DD.MM.YYYY (ex: BBD: 30.04.2027 sau Exp:15.08.2030)
+        let m = textSupl.match(/(?:BBD|Exp):\s*(\d{2})\.(\d{2})\.(\d{4})/i);
         if (m) return `${m[1]}/${m[2]}/${m[3]}`;
-        // Format YYYY-MM-DD (ex: BBD:2026-04-30)
-        m = textSupl.match(/BBD:\s*(\d{4})-(\d{2})-(\d{2})/);
+        // Format YYYY-MM-DD (ex: BBD:2026-04-30 sau Exp:2026-04-30)
+        m = textSupl.match(/(?:BBD|Exp):\s*(\d{4})-(\d{2})-(\d{2})/i);
         if (m) return `${m[3]}/${m[2]}/${m[1]}`;
         // Fallback: Data Expirare YYYY-MM-DD
         m = textSupl.match(/Data\s+Expirare\s+(\d{4})-(\d{2})-(\d{2})/i);
@@ -141,6 +144,67 @@
         });
 
         return { produse, sarite };
+    }
+
+    // ── Parsare antet factura (al 2-lea XML de la SAGA) ────────────────────────
+
+    // Antetul are un singur <c_xml> cu <cod_fiscal>/<nr_doc> si fara <cantitate>.
+    function esteAntet(xmlText) {
+        const doc = new DOMParser().parseFromString(xmlText, 'text/xml');
+        const items = doc.querySelectorAll('c_xml');
+        if (items.length !== 1) return false;
+        const it = items[0];
+        return !!(it.querySelector('cod_fiscal') || it.querySelector('nr_doc')) && !it.querySelector('cantitate');
+    }
+
+    // Prima zi a lunii din data facturii (YYYY-MM-DD) -> "01/MM/YYYY" (DD/MM/YYYY)
+    function primaZiLuna(dataIso) {
+        const m = (dataIso || '').match(/(\d{4})-(\d{2})-(\d{2})/);
+        if (!m) return '';
+        return `01/${m[2]}/${m[1]}`;
+    }
+
+    function parseazaAntet(xmlText) {
+        const doc = new DOMParser().parseFromString(xmlText, 'text/xml');
+        const it = doc.querySelector('c_xml');
+        const g = tag => (it?.querySelector(tag)?.textContent || '').trim();
+        const nrDoc = g('nr_doc');
+        // "MED2 85291" -> serie "MED2", numar "85291"; fallback litere+cifre
+        let serie = '', numar = '';
+        const sp = nrDoc.match(/^(.*\S)\s+(\d+)$/);
+        if (sp) { serie = sp[1].trim(); numar = sp[2]; }
+        else {
+            const lr = nrDoc.match(/^([A-Za-z]+)\s*(\d+)$/);
+            if (lr) { serie = lr[1]; numar = lr[2]; } else { numar = nrDoc; }
+        }
+        const dataFactura = g('data');
+        return {
+            tip:        /proces/i.test(g('tip')) ? 'proces' : 'factura',
+            furnizor:   g('denumire'),
+            cui:        g('cod_fiscal').replace(/^RO/i, '').trim(),
+            nrDoc, serie, numar,
+            dataFactura,
+            dataICmed:  primaZiLuna(dataFactura),
+            bazaTva:    g('baza_tva'),
+            tva:        g('tva'),
+            total:      parseFloat(g('total')) || 0,
+        };
+    }
+
+    // Suma liniilor de produse dintr-un XML (pentru imperecherea cu antetul, dupa total)
+    function sumaLinii(xmlText) {
+        const doc = new DOMParser().parseFromString(xmlText, 'text/xml');
+        let s = 0;
+        doc.querySelectorAll('c_xml').forEach(it => {
+            s += parseFloat((it.querySelector('total') || it.querySelector('valoare'))?.textContent || '0') || 0;
+        });
+        return s;
+    }
+
+    // Ultimul grup de cifre din numele fisierului (ex. XML-206-133822 -> 133822) — pentru tiebreak la imperechere
+    function timpFisier(nume) {
+        const m = (nume || '').match(/(\d+)(?=\D*$)/);
+        return m ? parseInt(m[1], 10) : 0;
     }
 
     // ── DOM helpers ───────────────────────────────────────────────────────────
@@ -389,6 +453,152 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         return candidati.sort((a, b) => b.contains(a) ? 1 : -1)[0] || null;
     }
 
+    // ── Completare antet: Factura + Nota receptie ─────────────────────────────
+
+    // Butonul "➕" (adauga) din randul unei etichete (ex. "Factura/Proces", "Nota receptie")
+    function gasesteButonAdauga(labelText) {
+        let lab = null;
+        for (const el of document.querySelectorAll('td, th, label')) {
+            if (el.textContent.trim().replace(':', '').trim().startsWith(labelText)) { lab = el; break; }
+        }
+        if (!lab) return null;
+        const scope = lab.closest('tr') || lab.parentElement;
+        if (!scope) return null;
+        const cand = [...scope.querySelectorAll('img, input[type="image"], button, a')].filter(el => el.offsetParent);
+        if (!cand.length) return null;
+        const add = cand.find(el => {
+            const s = (el.src || el.href || el.title || el.alt || el.className || '').toLowerCase();
+            return /add|plus|nou|new|adaug|insert|append/.test(s);
+        });
+        return add || cand[cand.length - 1]; // altfel ultimul buton (➕ e in dreapta)
+    }
+
+    // Butonul de cautare (fereastra) dintr-un rand — primul care nu pare delete/clear
+    function gasesteButonCautareIn(row) {
+        if (!row) return null;
+        const cand = [...row.querySelectorAll('img, input[type="image"], button, a')].filter(el => {
+            if (!el.offsetParent) return false;
+            const s = (el.src || el.href || el.title || el.alt || el.className || '').toLowerCase();
+            return !/delete|clear|remove|cancel|sterge/.test(s);
+        });
+        return cand[0] || null;
+    }
+
+    // Inputul de langa o eticheta, DAR doar in interiorul unui popup (ca sa nu nimerim campuri din pagina)
+    function campInPopup(popup, text) {
+        if (!popup) return null;
+        const labels = [...popup.querySelectorAll('td, th, label, span, div')];
+        const lab = labels.find(el => {
+            const t = el.textContent.trim().replace(':', '').trim();
+            return t.startsWith(text) && t.length <= text.length + 12 && !el.querySelector('input');
+        });
+        if (!lab) return null;
+        const inputs = [...popup.querySelectorAll('input[type="text"], input:not([type])')]
+            .filter(i => i.offsetParent && i.type !== 'hidden');
+        for (const inp of inputs) {
+            if (lab.compareDocumentPosition(inp) & Node.DOCUMENT_POSITION_FOLLOWING) return inp;
+        }
+        return inputs[0] || null;
+    }
+
+    async function salveazaPopup() {
+        const popup = gasestePopup();
+        const scope = popup || document;
+        const esteSalv = b => /^[^a-z]*salv/i.test((b.value || b.textContent || b.alt || b.title || '').trim());
+        // 1. elemente clar clickabile
+        let btn = [...scope.querySelectorAll('button, input[type="button"], input[type="submit"], input[type="image"], a')]
+            .find(b => b.offsetParent && esteSalv(b));
+        // 2. altfel un span/div/td cu text scurt "Salveaza" (eventual click pe iconita-sora)
+        if (!btn) {
+            const txt = [...scope.querySelectorAll('span, div, td')]
+                .filter(b => b.offsetParent && /salv/i.test(b.textContent || '') && (b.textContent || '').trim().length < 20)
+                .sort((a, b) => a.textContent.length - b.textContent.length)[0];
+            if (txt) {
+                const sib = txt.previousElementSibling || txt.nextElementSibling;
+                btn = (sib && (sib.tagName === 'IMG' || sib.tagName === 'A')) ? sib : txt;
+            }
+        }
+        if (btn) { btn.click(); await sleep(T_SAVE); await inchideDialogAvertisment(); return true; }
+        return false;
+    }
+
+    async function completeazaFactura(antet) {
+        const btn = gasesteButonAdauga('Factura/Proces');
+        if (!btn) throw new Error('nu gasesc butonul + de la Factura');
+        btn.click();
+        const deschis = await asteapta(() => {
+            const p = gasestePopup();
+            return p && campInPopup(p, 'Serie') ? p : null;
+        }, T_POPUP);
+        if (!deschis) throw new Error('popup-ul Factura nu s-a deschis');
+        await sleep(300);
+
+        // Furnizor — cauta dupa CUI in popup-ul de furnizor
+        const furnBtn = gasesteButonCautareIn(gasesteRandDupaLabel('Furnizor'));
+        if (furnBtn && antet.cui) {
+            furnBtn.click();
+            const sInput = await asteapta(() => {
+                const p = gasestePopup();
+                return p ? p.querySelector('input[type="text"], input:not([type])') : null;
+            }, T_POPUP);
+            if (sInput) {
+                sInput.focus();
+                sInput.value = antet.cui;
+                sInput.dispatchEvent(new Event('input',  { bubbles: true }));
+                sInput.dispatchEvent(new Event('change', { bubbles: true }));
+                await sleep(T_TYPE);
+                trimiteEnter(sInput);
+                await sleep(T_FILTER);
+                const p2 = gasestePopup();
+                if (p2) {
+                    const rows = [...p2.querySelectorAll('tr')].filter(r => r.cells.length > 1 && r.offsetParent);
+                    const prima = rows.find(r => r.closest('tbody')) || rows[0];
+                    if (prima) { prima.click(); await sleep(T_CLICK); }
+                }
+            }
+        }
+
+        const popup = gasestePopup();
+        // Tip: implicit Factura; daca e proces verbal, bifeaza al 2-lea radio
+        if (antet.tip === 'proces') {
+            const radios = [...popup.querySelectorAll('input[type="radio"]')].filter(r => r.offsetParent);
+            if (radios[1]) { radios[1].click(); }
+        }
+        const set = (label, val) => { const inp = campInPopup(popup, label); if (inp && val !== '' && val != null) seteazaValoare(inp, String(val)); };
+        set('Valoare fara', antet.bazaTva);
+        set('Valoare tva',  antet.tva);
+        set('Valoare totala', antet.total);
+        set('Serie', antet.serie);
+        set('Numar', antet.numar);
+        set('Data',  antet.dataICmed); // primul "Data" = data facturii; "Data scadenta" ramane goala
+
+        await salveazaPopup();
+    }
+
+    async function completeazaNota(antet) {
+        const btn = gasesteButonAdauga('Nota receptie');
+        if (!btn) throw new Error('nu gasesc butonul + de la Nota receptie');
+        btn.click();
+        const popup = await asteapta(() => {
+            const p = gasestePopup();
+            return p && campInPopup(p, 'Numar') ? p : null;
+        }, T_POPUP);
+        if (!popup) throw new Error('popup-ul Nota nu s-a deschis');
+        await sleep(300);
+
+        const numarInp = campInPopup(popup, 'Numar');
+        if (numarInp) {
+            const afisat = parseInt((numarInp.value || '').replace(/\D/g, ''), 10) || 0;
+            const nrNou = Math.max(afisat + 1, ultimNotaNr + 1);
+            ultimNotaNr = nrNou;
+            seteazaValoare(numarInp, String(nrNou));
+        }
+        const dataInp = campInPopup(popup, 'Data');
+        if (dataInp && antet.dataICmed) seteazaValoare(dataInp, antet.dataICmed);
+
+        await salveazaPopup();
+    }
+
     // ── Istoric facturi ───────────────────────────────────────────────────────
 
     function parseazaNumeFisier(filename) {
@@ -614,7 +824,11 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
             <label style="display:block;margin-bottom:6px;font-size:12px;color:#c8e6c9;">
                 Selecteaza fisierul XML din SAGA:
             </label>
-            <input id="ia-file" type="file" accept=".xml" style="width:100%;font-size:12px;margin-bottom:10px;"/>
+            <input id="ia-file" type="file" accept=".xml" style="width:100%;font-size:12px;margin-bottom:8px;"/>
+            <label style="display:block;margin-bottom:4px;font-size:12px;color:#c8e6c9;">…sau incarca un folder intreg de XML-uri:</label>
+            <input id="ia-folder" type="file" webkitdirectory directory multiple style="width:100%;font-size:11px;margin-bottom:6px;"/>
+            <select id="ia-factura-select" style="display:none;width:100%;font-size:12px;padding:4px;margin-bottom:6px;border-radius:4px;border:none;"></select>
+            <button id="ia-btn-antet" style="display:none;width:100%;padding:8px;background:#8e24aa;border:none;border-radius:5px;color:#fff;font-weight:bold;cursor:pointer;font-size:12px;margin-bottom:8px;">📋 Completeaza Factura + Nota</button>
             <div id="ia-status" style="color:#c8e6c9;font-size:12px;margin-bottom:8px;"></div>
             <div id="ia-jump" style="display:none;align-items:center;gap:6px;margin-bottom:8px;">
                 <span style="font-size:12px;color:#c8e6c9;white-space:nowrap;">Mergi la nr:</span>
@@ -659,6 +873,7 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
     // ── State ─────────────────────────────────────────────────────────────────
 
     let lista = [], idx = 0, autoCompletat = false;
+    let facturiIncarcate = [], antetCurent = null, ultimNotaNr = 0;
 
     // ── Display produs ────────────────────────────────────────────────────────
 
@@ -1008,6 +1223,95 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
                 proceseazaXML(ev.target.result, false, infoFactura);
             };
             reader.readAsText(file);
+        });
+
+        // ── Incarcare folder intreg + imperechere antet/produse ───────────────
+        const citesteFisier = f => new Promise(res => {
+            const r = new FileReader();
+            r.onload = ev => res(ev.target.result);
+            r.readAsText(f);
+        });
+
+        document.getElementById('ia-folder').addEventListener('change', async function (e) {
+            const files = [...e.target.files].filter(f => /\.xml$/i.test(f.name));
+            if (!files.length) return;
+            const status = document.getElementById('ia-status');
+            status.textContent = `Citesc ${files.length} fisiere…`;
+
+            const parsed = [];
+            for (const f of files) parsed.push({ name: f.name, text: await citesteFisier(f) });
+
+            const anteturi = [], produseF = [];
+            for (const p of parsed) {
+                if (esteAntet(p.text)) anteturi.push(p);
+                else produseF.push({ ...p, suma: sumaLinii(p.text), folosit: false });
+            }
+
+            facturiIncarcate = [];
+            for (const a of anteturi) {
+                const antet = parseazaAntet(a.text);
+                const tA = timpFisier(a.name);
+                const cand = produseF.filter(pf => !pf.folosit && Math.abs(pf.suma - antet.total) < 0.02);
+                let ales = cand.length === 1 ? cand[0]
+                    : cand.length > 1
+                        ? cand.slice().sort((x, y) => Math.abs(timpFisier(x.name) - tA) - Math.abs(timpFisier(y.name) - tA))[0]
+                        : null;
+                if (ales) ales.folosit = true;
+                facturiIncarcate.push({ antet, produseText: ales ? ales.text : null, numeProduse: ales ? ales.name : null });
+            }
+            // fisiere de produse fara antet (format vechi) — le pastram si pe ele
+            for (const pf of produseF) {
+                if (!pf.folosit) facturiIncarcate.push({ antet: null, produseText: pf.text, numeProduse: pf.name });
+            }
+
+            const sel = document.getElementById('ia-factura-select');
+            sel.innerHTML = '<option value="">— alege factura —</option>' + facturiIncarcate.map((f, i) => {
+                const et = f.antet ? `${f.antet.furnizor} ${f.antet.nrDoc}` : (f.numeProduse || `factura ${i + 1}`);
+                const warn = f.antet && !f.produseText ? ' ⚠ fara produse' : '';
+                return `<option value="${i}">${esc(et)}${warn}</option>`;
+            }).join('');
+            sel.style.display = 'block';
+            status.textContent = `${facturiIncarcate.length} facturi gasite. Alege una din lista.`;
+        });
+
+        document.getElementById('ia-factura-select').addEventListener('change', function (e) {
+            const i = parseInt(e.target.value, 10);
+            const f = facturiIncarcate[i];
+            const btnAntet = document.getElementById('ia-btn-antet');
+            if (!f) { antetCurent = null; btnAntet.style.display = 'none'; return; }
+            antetCurent = f.antet;
+            btnAntet.style.display = f.antet ? 'block' : 'none';
+            btnAntet.disabled = false;
+            btnAntet.textContent = '📋 Completeaza Factura + Nota';
+            if (f.produseText) {
+                const info = f.antet
+                    ? { firma: f.antet.furnizor, serie: f.antet.serie, nr: f.antet.numar, cheie: (f.antet.serie + f.antet.numar) || f.antet.nrDoc, filename: f.antet.nrDoc }
+                    : (f.numeProduse ? parseazaNumeFisier(f.numeProduse) : null);
+                localStorage.setItem(KEYS.xml, f.produseText);
+                if (f.numeProduse) localStorage.setItem(KEYS.xmlFilename, f.numeProduse);
+                localStorage.removeItem(KEYS.extraMateriale);
+                localStorage.removeItem(KEYS.idxMed);
+                localStorage.removeItem(KEYS.idxMat);
+                autoCompletat = false;
+                proceseazaXML(f.produseText, false, info);
+            }
+        });
+
+        document.getElementById('ia-btn-antet').addEventListener('click', async function () {
+            if (!antetCurent) return;
+            const btn = this;
+            btn.disabled = true;
+            btn.textContent = 'Se completeaza Factura…';
+            try {
+                await completeazaFactura(antetCurent);
+                btn.textContent = 'Se completeaza Nota…';
+                await sleep(500);
+                await completeazaNota(antetCurent);
+                btn.textContent = '✅ Antet completat — verifica, apoi treci la produse';
+            } catch (err) {
+                btn.textContent = '⚠ ' + (err.message || 'eroare') + ' — incearca manual';
+                btn.disabled = false;
+            }
         });
 
         document.getElementById('ia-btn-jump').addEventListener('click', () => {

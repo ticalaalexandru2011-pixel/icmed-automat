@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.9
+// @version      1.10
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -1110,6 +1110,16 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
     function init() {
         creeazaPanel();
         afiseazaIstoric();
+
+        // Fortam selectia de folder din JS (atributul din HTML nu se aplica mereu in Chrome)
+        const folderInp = document.getElementById('ia-folder');
+        if (folderInp) {
+            try {
+                folderInp.webkitdirectory = true;
+                folderInp.setAttribute('webkitdirectory', '');
+                folderInp.setAttribute('directory', '');
+            } catch (e) { /* ignoram */ }
+        }
 
         // Comenzi in meniul Tampermonkey pentru cheia API (nu se stocheaza in cod)
         if (typeof GM_registerMenuCommand === 'function') {

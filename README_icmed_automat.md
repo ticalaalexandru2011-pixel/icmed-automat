@@ -1,7 +1,17 @@
-# iCmed Automat - Alimentare Stoc (v1.9)
+# iCmed Automat - Alimentare Stoc (v1.14)
 
 Script Tampermonkey care completeaza automat formularul "Alimentare stoc medicamente" / "Alimentare stoc materiale"
 din iCmed, pe baza unui fisier XML exportat din SAGA.
+
+---
+
+## ⏳ STATUS CURENT — unde am ramas (de continuat)
+
+**Functioneaza:** incarcare folder, imperechere antet↔produse dupa total (dropdown arata corect "MEDAZ LIFE CONSUM SRL MED2 85291"), parsare produse cu formatul `Serie:`/`Exp:`, persistenta cozii la schimbarea paginii, detectia butoanelor `btnAddFactura`/`btnNotaRec` si a campului `cmbFactura_Display`.
+
+**De reparat:** la apasarea butonului "📋 Completeaza Factura + Nota", scriptul apasa ➕ si popup-ul Factura CHIAR se deschide, dar `completeazaFactura` da eroarea "popup-ul Factura nu s-a deschis" — adica `gasestePopup()` / `campInPopup(popup,'Serie')` NU detecteaza popup-ul modal. **Urmatorul pas:** capturez HTML-ul popup-ului de Factura deschis (buton 🐞 Debug cu popup deschis) ca sa vad de ce nu-l prinde `gasestePopup` (poate nu e position:fixed / z-index>100, sau e alt container) si ajustez selectorul + `campInPopup` pe id-urile reale ale campurilor din popup (Furnizor, Serie, Numar, Data, Valori, Salveaza).
+
+**Canal de debug:** butonul 🐞 Debug copiaza raportul in clipboard SI il poate trimite la un URL webhook.site (vezi sectiunea Debug). De setat URL-ul webhook o data.
 
 ---
 
@@ -82,6 +92,27 @@ Se cauta dupa **CUI** (`cod_fiscal` din XML, fara prefixul "RO") — potrivire s
 ### Fisiere fara antet (format vechi)
 
 Daca in folder sunt fisiere de produse fara antet (formatul vechi `FIRMA SERIENR.xml`), apar si ele in lista si merg ca inainte (doar produse, fara completare antet).
+
+### "Antet deja introdus" + persistenta intre pagini (v1.12)
+
+- Coada de facturi + factura selectata se salveaza in `localStorage`, deci butonul "Completeaza Factura + Nota" **nu mai dispare** cand schimbi pagina (med ↔ materiale).
+- Butonul stie daca antetul e deja introdus: verifica un marcaj salvat (`icmed-automat-antet-done`, per factura+pagina) SAU daca combobox-ul `cmbFactura_Display` din pagina e completat. Daca da -> butonul devine verde "✅ Antet introdus" si cere confirmare inainte sa reintroduca.
+
+### Selectori reali iCmed (v1.13)
+
+Din pagina reala: butoanele ➕ sunt `input[type=image]` cu `name` ce contine `btnAddFactura` / `btnNotaRec` (prefix `ctl11_ctl02_` variabil). Campul Factura e un combobox cu `cmbFactura_Display`. Scriptul le cauta dupa fragment de name/id, cu fallback pe euristica.
+
+---
+
+## Buton 🐞 Debug (pentru depanarea automatizarii)
+
+In header-ul panoului e butonul **🐞 Debug**. Cand il apesi:
+1. Ruleaza un auto-test: ce gasesc selectorii (butoane ➕, campuri popup, buton Salveaza) + aduna HTML-ul popup-ului deschis si al randurilor Factura/Nota.
+2. **Copiaza tot in clipboard** (Ctrl+V) SI, daca e setat, **trimite la un URL webhook.site** ca sa-l poata citi Claude direct.
+
+**Setare URL webhook (o data):** intri pe https://webhook.site, copiezi URL-ul unic, si il pui fie la prima apasare Debug (prompt), fie din meniul Tampermonkey -> "🌐 Seteaza URL debug (webhook.site)". URL-ul se stocheaza local prin `GM_setValue` (cheia `icmed-debug-url`), nu in cod.
+
+**Folosire:** deschizi popup-ul de depanat (ex. ➕ Factura) -> apesi 🐞 Debug -> raportul ajunge la webhook/clipboard. Atentie: webhook.site e public — doar structura paginii, NU date de pacienti.
 
 ---
 
@@ -370,6 +401,11 @@ Pret/bucata  = valoare / total_bucati (4 zecimale, separator virgula)
 | `icmed-automat-istoric`        | Array cu toate facturile procesate (organizate pe foldere) |
 | `icmed-automat-extra-materiale`| Produse cu W rutate manual catre materiale        |
 | `icmed-automat-folders`        | Array foldere personalizate din istoric           |
+| `icmed-automat-folder-queue`   | Coada de facturi din folderul incarcat (supravietuieste reload-ului) |
+| `icmed-automat-folder-sel`     | Indexul facturii selectate din coada              |
+| `icmed-automat-antet-done`     | Marcaj: antet (Factura+Nota) introdus per factura+pagina |
+
+Prin `GM_setValue` (nu localStorage, nu in cod): `icmed-anthropic-key` (cheia AI), `icmed-debug-url` (URL webhook debug).
 
 ---
 

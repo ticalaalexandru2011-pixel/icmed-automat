@@ -1,4 +1,4 @@
-# iCmed Automat - Alimentare Stoc (v1.7)
+# iCmed Automat - Alimentare Stoc (v1.8)
 
 Script Tampermonkey care completeaza automat formularul "Alimentare stoc medicamente" / "Alimentare stoc materiale"
 din iCmed, pe baza unui fisier XML exportat din SAGA.
@@ -129,6 +129,24 @@ afiseaza un avertisment rosu si o casuta "Buc/cutie:" in panou:
 2. Dai **"Aplica"** sau **Enter**
 3. Scriptul recalculeaza cantitatea si pretul
 4. Continui normal cu "Completeaza campurile"
+
+### Buton "🔎 AI" (cautare automata pe net)
+
+In casuta rosie exista si un buton **"🔎 AI"**. Cand il apesi:
+
+1. Scriptul trimite denumirea produsului la Claude (API Anthropic), care **cauta pe net** (nomenclator ANMM, prospect, farmacii online) cate bucati sunt intr-o cutie
+2. Iti **pre-completeaza** casuta "Buc/cutie:" cu numarul propus + arata sursa, increderea si o explicatie
+3. **NU aplica automat** — tu verifici si apesi "Aplica" daca e corect
+
+**Important — de verificat mereu:** AI-ul poate gresi ambalajul. Pe stoc de farmacie, o cifra gresita inseamna cantitate si pret gresit. Foloseste sugestia ca punct de plecare, nu ca adevar garantat.
+
+**Cheia API (necesara pentru AI):**
+- Iei o cheie de pe https://console.anthropic.com → API Keys
+- O setezi din meniul Tampermonkey: click pe iconita Tampermonkey → **"🔑 Seteaza cheia API Anthropic"** → lipesti cheia
+- Cheia se stocheaza local in Tampermonkey (`GM_setValue`), **nu** in cod si **nu** se urca pe GitHub
+- O poti sterge oricand cu **"🗑 Sterge cheia API Anthropic"** din acelasi meniu
+
+**Cost:** platesti la consum pe cheia ta, doar cand apesi butonul (cativa centi pe cautare). Modelul folosit (`claude-sonnet-4-6`) se poate schimba in `AI_MODEL` din script (ex: `claude-haiku-4-5` pentru mai ieftin).
 
 ---
 
@@ -279,11 +297,16 @@ Din denumire se extrage numarul de bucati:
 - "X 30CP.FILM"  -> 30 bucati/cutie
 - "X 5FI"        -> 5 fiole/cutie
 - "20FI BRAUN"   -> 20 fiole/cutie (fara X)
+- "CT*20FI"      -> 20 fiole/cutie (format CRISFARM/UNICAFARM)
+- "CTX56 CPR"    -> 56 comprimate/cutie
+- "... (BUC)"    -> 1 buc/cutie (cantitatea e deja in bucati individuale)
 - "X 1000ML"     -> 1 (volum, nu bucati - ML nu e in lista de unitati)
 
-Unitati recunoscute: FI, FIOLE, FL, FLACOANE, CP, CPS, CAPS, CAPSULE, TB, DR, DRAJEURI, COMP, COMPRIMATE, PLIC, SUPOZ, AMP
+Unitati recunoscute: FI, FIOLE, FL, FLACOANE, CP, CPS, CAPS, CAPSULE, CPR, TB, DR, DRAJEURI, COMP, COMPR, COMPRIMATE, PLIC, SUPOZ, SUPOZITOARE, AMP
 
-**Nerecunoscute (afiseaza avertisment rosu):** BUC, CPR, ML, G, MG — pentru acestea introduci manual buc/cutie in casuta rosie.
+Tipare speciale: `CT*N` / `CTxN` / `CTXN` (cutie x N), `(BUC)` -> 1.
+
+**Inca nerecunoscute (afiseaza avertisment rosu):** ML, G, MG si denumiri fara nicio unitate — pentru acestea introduci manual buc/cutie in casuta rosie, sau apesi **"🔎 AI"** sa caute pe net (vezi sectiunea "Buton AI").
 
 Total bucati = round(bucati_cutie x cantitate_din_xml)
 Pret/bucata  = valoare / total_bucati (4 zecimale, separator virgula)

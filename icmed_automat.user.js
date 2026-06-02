@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.7
+// @version      1.8
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -12,7 +12,11 @@
 // @supportURL   https://github.com/ticalaalexandru2011-pixel/icmed-automat/issues
 // @updateURL    https://raw.githubusercontent.com/ticalaalexandru2011-pixel/icmed-automat/main/icmed_automat.user.js
 // @downloadURL  https://raw.githubusercontent.com/ticalaalexandru2011-pixel/icmed-automat/main/icmed_automat.user.js
-// @grant        none
+// @grant        GM_xmlhttpRequest
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_registerMenuCommand
+// @connect      api.anthropic.com
 // ==/UserScript==
 
 (function () {
@@ -47,6 +51,12 @@
     const T_RECALC = 700;   // recalculul paginii dupa setarea pretului
     const T_SAVE   = 1200;  // dupa click pe Salveaza
     const T_CLICK  = 600;   // dupa click pe un rand din rezultate
+
+    // ── AI (rezerva pentru buc/cutie nedetectat) ──────────────────────────────
+    // Modelul Claude folosit la cautarea pe net. Sonnet 4.6 = echilibru pret/acuratete
+    // (cativa centi/cautare, doar cand apesi butonul). Pune 'claude-haiku-4-5' pentru mai ieftin.
+    const AI_MODEL   = 'claude-sonnet-4-6';
+    const AI_KEY_GM  = 'icmed-anthropic-key'; // cheia API, stocata prin GM_setValue (nu in cod)
 
     // ── Parsare XML ───────────────────────────────────────────────────────────
 
@@ -86,8 +96,13 @@
 
     function bucatiPerCutie(denumire) {
         if (!denumire) return 1;
-        const U = '(FI(?:OLE)?|FL(?:ACOANE)?|CP(?:S|SULE|\\.[\\w.]*)?|CPS|CAPS(?:ULE)?|TB|DR(?:AJEURI)?|COMP(?:RIMATE)?|PLIC|SUPOZ|AMP)';
-        let m = denumire.match(new RegExp('X\\s*(\\d+)\\s*' + U, 'i'));
+        // "(BUC)" => cantitatea din XML e deja in bucati individuale (1 buc/cutie)
+        if (/\(\s*BUC\s*\)/i.test(denumire)) return 1;
+        const U = '(FI(?:OLE)?|FL(?:ACOANE)?|CPR|CP(?:S|SULE|\\.[\\w.]*)?|CPS|CAPS(?:ULE)?|TB|DR(?:AJEURI)?|COMP(?:R(?:IMATE)?)?|PLIC|SUPOZ(?:ITOARE)?|AMP)';
+        // Format CRISFARM/UNICAFARM: "CT*20FI", "CTX56 CPR" (cutie x N) => N buc/cutie
+        let m = denumire.match(/CT\s*[\*xX]\s*(\d+)/i);
+        if (m) return parseInt(m[1], 10);
+        m = denumire.match(new RegExp('X\\s*(\\d+)\\s*' + U, 'i'));
         if (m) return parseInt(m[1], 10);
         m = denumire.match(new RegExp('\\b(\\d+)\\s*' + U, 'i'));
         if (m) return parseInt(m[1], 10);
@@ -292,6 +307,75 @@
         recompletate.push(...setate);
 
         return recompletate;
+    }
+
+    // ── AI: cauta buc/cutie pe net cand nu se detecteaza din denumire ─────────
+
+    function aiGetKey()  { return (typeof GM_getValue === 'function' ? GM_getValue(AI_KEY_GM, '') : '') || ''; }
+    function aiSetKey(k) { if (typeof GM_setValue === 'function') GM_setValue(AI_KEY_GM, k || ''); }
+
+    function aiCereCheie() {
+        const k = window.prompt('Lipeste cheia API Anthropic (incepe cu sk-ant-...):', aiGetKey());
+        if (k && k.trim()) { aiSetKey(k.trim()); return k.trim(); }
+        return aiGetKey();
+    }
+
+    // Apeleaza Claude cu web search; intoarce {buc, incredere, sursa, explicatie} sau arunca eroare.
+    function intreabaAI(prod) {
+        return new Promise((resolve, reject) => {
+            const key = aiGetKey();
+            if (!key) { reject(new Error('Lipseste cheia API')); return; }
+            if (typeof GM_xmlhttpRequest !== 'function') {
+                reject(new Error('GM_xmlhttpRequest indisponibil (verifica @grant)')); return;
+            }
+
+            const prompt = `Esti asistent pentru o farmacie din Romania. Pentru produsul de mai jos, afla cate bucati individuale (fiole, comprimate, capsule, plicuri, flacoane etc.) sunt intr-o cutie / ambalaj comercial. Cauta pe net (nomenclatorul ANMM, prospect, farmacii online).
+
+Denumire: "${prod.denumire}"${prod.w ? `\nCod CIM: ${prod.w}` : ''}
+
+Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
+{"buc_per_cutie": <numar intreg sau null>, "incredere": "mare|medie|mica", "sursa": "<de unde>", "explicatie": "<o propozitie scurta in romana>"}`;
+
+            GM_xmlhttpRequest({
+                method: 'POST',
+                url: 'https://api.anthropic.com/v1/messages',
+                headers: {
+                    'content-type': 'application/json',
+                    'x-api-key': key,
+                    'anthropic-version': '2023-06-01',
+                    'anthropic-dangerous-direct-browser-access': 'true'
+                },
+                data: JSON.stringify({
+                    model: AI_MODEL,
+                    max_tokens: 1024,
+                    tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 3 }],
+                    messages: [{ role: 'user', content: prompt }]
+                }),
+                timeout: 60000,
+                onload: (resp) => {
+                    try {
+                        if (resp.status === 401) { aiSetKey(''); reject(new Error('Cheie API invalida (401) — reintrod-o')); return; }
+                        if (resp.status < 200 || resp.status >= 300) {
+                            reject(new Error('Eroare API ' + resp.status)); return;
+                        }
+                        const data = JSON.parse(resp.responseText);
+                        const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
+                        const mj = text.match(/\{[\s\S]*\}/);
+                        if (!mj) { reject(new Error('Raspuns AI neasteptat')); return; }
+                        const obj = JSON.parse(mj[0]);
+                        const n = parseInt(obj.buc_per_cutie, 10);
+                        resolve({
+                            buc: Number.isFinite(n) && n > 0 ? n : null,
+                            incredere: obj.incredere || '',
+                            sursa: obj.sursa || '',
+                            explicatie: obj.explicatie || ''
+                        });
+                    } catch (e) { reject(e); }
+                },
+                onerror: () => reject(new Error('Eroare de retea catre api.anthropic.com')),
+                ontimeout: () => reject(new Error('Timeout la apelul AI'))
+            });
+        });
     }
 
     function gasestePopup() {
@@ -540,10 +624,12 @@
                 </button>
             </div>
             <div id="ia-card" style="display:none;background:#2d4a1a;border-radius:6px;padding:10px;margin-bottom:10px;font-size:12px;line-height:1.6;"></div>
-            <div id="ia-buc-row" style="display:none;align-items:center;gap:6px;margin-bottom:8px;padding:6px 8px;background:#7f1010;border-radius:4px;">
+            <div id="ia-buc-row" style="display:none;flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:8px;padding:6px 8px;background:#7f1010;border-radius:4px;">
                 <span style="font-size:11px;color:#ffcdd2;white-space:nowrap;">Buc/cutie:</span>
                 <input id="ia-buc-nr" type="number" min="1" value="1" style="width:60px;font-size:13px;padding:3px 5px;border-radius:4px;border:none;font-weight:bold;"/>
                 <button id="ia-btn-buc" style="flex:1;padding:5px 8px;background:#ef5350;border:none;border-radius:4px;color:#fff;font-weight:bold;cursor:pointer;font-size:12px;">Aplica</button>
+                <button id="ia-btn-ai" title="Cauta pe net cate buc/cutie (sugestie de verificat)" style="padding:5px 8px;background:#5e35b1;border:none;border-radius:4px;color:#fff;font-weight:bold;cursor:pointer;font-size:12px;white-space:nowrap;">🔎 AI</button>
+                <div id="ia-ai-result" style="display:none;width:100%;font-size:11px;color:#fff;background:#4527a0;border-radius:4px;padding:5px 7px;line-height:1.4;"></div>
             </div>
             <button id="ia-btn-fill" style="display:none;width:100%;padding:9px;background:#66bb6a;border:none;border-radius:5px;color:#fff;font-weight:bold;cursor:pointer;font-size:13px;margin-bottom:6px;">
                 Completeaza campurile
@@ -597,6 +683,8 @@
             ${avertBuc}
         `;
         const bucRow = document.getElementById('ia-buc-row');
+        const aiRes = document.getElementById('ia-ai-result');
+        if (aiRes) aiRes.style.display = 'none';
         if (!p.bucCutieDetectat) {
             bucRow.style.display = 'flex';
             document.getElementById('ia-buc-nr').value = p.bucCutie;
@@ -808,6 +896,15 @@
         creeazaPanel();
         afiseazaIstoric();
 
+        // Comenzi in meniul Tampermonkey pentru cheia API (nu se stocheaza in cod)
+        if (typeof GM_registerMenuCommand === 'function') {
+            GM_registerMenuCommand('🔑 Seteaza cheia API Anthropic', aiCereCheie);
+            GM_registerMenuCommand('🗑 Sterge cheia API Anthropic', () => {
+                aiSetKey('');
+                window.alert('Cheia API a fost stearsa.');
+            });
+        }
+
         const xmlSalvat = localStorage.getItem(KEYS.xml);
         if (xmlSalvat) {
             const filenameSalvat = localStorage.getItem(KEYS.xmlFilename);
@@ -937,6 +1034,36 @@
         }
         document.getElementById('ia-btn-buc').addEventListener('click', aplicaBucCutie);
         document.getElementById('ia-buc-nr').addEventListener('keydown', e => { if (e.key === 'Enter') aplicaBucCutie(); });
+
+        document.getElementById('ia-btn-ai').addEventListener('click', async () => {
+            const btn = document.getElementById('ia-btn-ai');
+            const res = document.getElementById('ia-ai-result');
+            const prod = lista[idx];
+            if (!prod) return;
+            if (!aiGetKey()) { aiCereCheie(); if (!aiGetKey()) return; }
+
+            btn.disabled = true;
+            const txtVechi = btn.textContent;
+            btn.textContent = '⏳';
+            res.style.display = 'block';
+            res.innerHTML = 'AI cauta pe net…';
+            try {
+                const r = await intreabaAI(prod);
+                if (r.buc) {
+                    document.getElementById('ia-buc-nr').value = r.buc; // doar pre-completare, NU aplica
+                    res.innerHTML = `<b style="color:#b39ddb;">Sugestie: ${r.buc} buc/cutie</b> (incredere: ${esc(r.incredere)})<br/>`
+                        + `${esc(r.explicatie)}<br/><span style="color:#b39ddb;">Sursa: ${esc(r.sursa)}</span><br/>`
+                        + `<span style="color:#ffcc02;">⚠ Verifica si apasa „Aplica".</span>`;
+                } else {
+                    res.innerHTML = `AI n-a putut stabili sigur numarul.<br/>${esc(r.explicatie)}`;
+                }
+            } catch (e) {
+                res.innerHTML = `<span style="color:#ff8a65;">Eroare AI: ${esc(e.message || String(e))}</span>`;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = txtVechi;
+            }
+        });
 
         document.getElementById('ia-btn-fill').addEventListener('click', () => {
             autoCompletat = true;

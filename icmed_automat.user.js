@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.13
+// @version      1.14
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -18,6 +18,7 @@
 // @grant        GM_registerMenuCommand
 // @grant        GM_setClipboard
 // @connect      api.anthropic.com
+// @connect      webhook.site
 // ==/UserScript==
 
 (function () {
@@ -61,6 +62,7 @@
     // (cativa centi/cautare, doar cand apesi butonul). Pune 'claude-haiku-4-5' pentru mai ieftin.
     const AI_MODEL   = 'claude-sonnet-4-6';
     const AI_KEY_GM  = 'icmed-anthropic-key'; // cheia API, stocata prin GM_setValue (nu in cod)
+    const DBG_URL_GM = 'icmed-debug-url';     // URL webhook.site pt. trimitere debug (stocat local, nu in cod)
 
     // ── Parsare XML ───────────────────────────────────────────────────────────
 
@@ -680,6 +682,32 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         return `GASIT <${el.tagName.toLowerCase()} ${a.join(' ')}>`;
     }
 
+    // URL webhook unde trimitem debug-ul (ca sa-l citeasca Claude cu WebFetch)
+    function dbgGetUrl()  { return (typeof GM_getValue === 'function' ? GM_getValue(DBG_URL_GM, '') : '') || ''; }
+    function dbgSetUrl(u) { if (typeof GM_setValue === 'function') GM_setValue(DBG_URL_GM, (u || '').trim()); }
+    function dbgCereUrl() {
+        const u = window.prompt('Lipeste URL-ul de pe webhook.site (ex: https://webhook.site/xxxxxxxx-xxxx-...):', dbgGetUrl());
+        if (u && u.trim()) { dbgSetUrl(u.trim()); return u.trim(); }
+        return dbgGetUrl();
+    }
+    function dbgTrimiteWebhook(text) {
+        return new Promise((resolve, reject) => {
+            const url = dbgGetUrl();
+            if (!url) { reject(new Error('fara URL webhook')); return; }
+            if (typeof GM_xmlhttpRequest !== 'function') { reject(new Error('GM_xmlhttpRequest indisponibil')); return; }
+            GM_xmlhttpRequest({
+                method: 'POST',
+                url,
+                headers: { 'content-type': 'text/plain;charset=utf-8' },
+                data: text,
+                timeout: 15000,
+                onload: r => (r.status >= 200 && r.status < 300) ? resolve() : reject(new Error('status ' + r.status)),
+                onerror: () => reject(new Error('eroare retea')),
+                ontimeout: () => reject(new Error('timeout'))
+            });
+        });
+    }
+
     function debugRaport() {
         const L = [];
         let ver = '?'; try { ver = GM_info.script.version; } catch (e) {}
@@ -1251,6 +1279,7 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
                 aiSetKey('');
                 window.alert('Cheia API a fost stearsa.');
             });
+            GM_registerMenuCommand('🌐 Seteaza URL debug (webhook.site)', dbgCereUrl);
         }
 
         const xmlSalvat = localStorage.getItem(KEYS.xml);
@@ -1354,13 +1383,11 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
             el.style.display = el.style.display === 'none' ? 'block' : 'none';
         });
 
-        document.getElementById('ia-btn-debug').addEventListener('click', () => {
+        document.getElementById('ia-btn-debug').addEventListener('click', async () => {
             const r = debugRaport();
             const status = document.getElementById('ia-status');
-            if (r.copiat) {
-                status.textContent = '🐞 Debug copiat in clipboard — lipeste-l la Claude (Ctrl+V).';
-            } else {
-                // fallback: arata textul intr-o casuta de unde copiezi manual
+            // 1. clipboard (backup)
+            if (!r.copiat) {
                 let ta = document.getElementById('ia-debug-ta');
                 if (!ta) {
                     ta = document.createElement('textarea');
@@ -1371,6 +1398,20 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
                 ta.value = r.text;
                 ta.style.display = 'block';
                 ta.focus(); ta.select();
+            }
+            // 2. trimite la webhook (ca sa-l citeasca Claude)
+            if (!dbgGetUrl()) dbgCereUrl();
+            if (dbgGetUrl()) {
+                status.textContent = '🐞 Trimit debug la webhook…';
+                try {
+                    await dbgTrimiteWebhook(r.text);
+                    status.textContent = '🐞 Trimis la webhook ✓ — spune-i lui Claude „gata".';
+                } catch (e) {
+                    status.textContent = '🐞 Webhook esuat (' + (e.message || '') + '). ' + (r.copiat ? 'E in clipboard — da Ctrl+V.' : 'Copiaza din casuta de mai jos.');
+                }
+            } else if (r.copiat) {
+                status.textContent = '🐞 Debug copiat in clipboard — lipeste-l la Claude (Ctrl+V).';
+            } else {
                 status.textContent = '🐞 Copiaza tot din casuta de mai jos (Ctrl+A, Ctrl+C) si lipeste la Claude.';
             }
         });

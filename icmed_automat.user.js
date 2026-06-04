@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.28
+// @version      1.29
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -645,11 +645,16 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         const vis = (d, frag) => [...d.querySelectorAll(`input[id*="${frag}"], input[name*="${frag}"]`)]
             .find(i => i.offsetParent && i.type !== 'hidden');
 
-        // pune un camp (dupa fragment de id), re-gaseste doc-ul, apoi asteapta refresh-ul
+        // pune un camp, apoi BLUR (commit) ca sa declanseze calculul iCmed (ex. totala),
+        // re-gaseste doc-ul, apoi asteapta micul refresh
         const pune = async (frag, val) => {
             doc = gasesteModalDoc() || doc;
             const inp = vis(doc, frag);
-            if (inp && val !== '' && val != null) seteazaValoare(inp, String(val));
+            if (inp && val !== '' && val != null) {
+                seteazaValoare(inp, String(val));
+                inp.dispatchEvent(new Event('blur', { bubbles: true }));
+                inp.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+            }
             await sleep(T_REFRESH);
         };
 
@@ -657,14 +662,28 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         const tvaV = parseFloat(String(antet.tva).replace(',', '.')) || 0;
         const cota = (baza > 0 && tvaV > 0) ? Math.round(tvaV / baza * 100) : 0;
 
-        // ordine: cota TVA -> fara -> tva -> serie -> numar -> data -> TOTALA (ultima)
+        // ordine: cota TVA -> fara (blur-ul declanseaza calculul totalei) -> tva -> serie -> numar -> data
         doc = gasesteModalDoc() || doc; setCotaTva(doc, cota); await sleep(T_REFRESH);
         await pune('txtValoareFaraTVA', mon(antet.bazaTva));
         await pune('txtValoareTVA',     mon(antet.tva));
         await pune('txtSeriaFacturii',  antet.serie);
         await pune('txtNrFactura',      antet.numar);
         await pune('txtDataFactura',    antet.dataICmed); // "Data scadenta" ramane goala
-        await pune('txtValoareTotala',  mon(antet.totalStr)); // ULTIMA, dupa ce totul s-a asezat
+
+        // "Valoare totala": campul cere CLICK ca sa devina editabil (Tab nu ajunge la el).
+        // Deci: click (mousedown+click+focus) -> scriem valoarea -> blur.
+        doc = gasesteModalDoc() || doc;
+        const tot = vis(doc, 'txtValoareTotala');
+        if (tot) {
+            tot.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+            tot.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+            tot.click();
+            tot.focus();
+            await sleep(150);
+            seteazaValoare(tot, mon(antet.totalStr));
+            tot.dispatchEvent(new Event('blur', { bubbles: true }));
+            tot.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+        }
 
         if (ANTET_SALVEAZA) await salveazaModal(doc);
     }

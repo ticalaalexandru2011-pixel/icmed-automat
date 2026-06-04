@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.29
+// @version      1.30
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -680,7 +680,18 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
             tot.click();
             tot.focus();
             await sleep(150);
-            seteazaValoare(tot, mon(antet.totalStr));
+            // campul accepta doar taste reale -> simulam tastarea caracter cu caracter
+            tot.value = '';
+            const txt = mon(antet.totalStr);
+            for (const ch of txt) {
+                tot.value += ch;
+                tot.dispatchEvent(new KeyboardEvent('keydown',  { key: ch, bubbles: true }));
+                tot.dispatchEvent(new KeyboardEvent('keypress', { key: ch, bubbles: true }));
+                tot.dispatchEvent(new Event('input', { bubbles: true }));
+                tot.dispatchEvent(new KeyboardEvent('keyup',    { key: ch, bubbles: true }));
+                await sleep(40);
+            }
+            tot.dispatchEvent(new Event('change', { bubbles: true }));
             tot.dispatchEvent(new Event('blur', { bubbles: true }));
             tot.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
         }

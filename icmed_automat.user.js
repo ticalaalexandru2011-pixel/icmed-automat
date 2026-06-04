@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.15
+// @version      1.16
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -728,8 +728,39 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
             L.push('--- HTML POPUP (max 9000) ---');
             L.push((popup.outerHTML || '').slice(0, 9000));
         } else {
-            L.push('Popup deschis: NU (deschide popup-ul Factura/Nota/Furnizor si apasa Debug din nou)');
+            L.push('Popup deschis: NU (gasestePopup nu prinde modalul — scanez mai jos)');
         }
+
+        // Recon: iframe-uri (modalul icMED poate fi iframe) — ruleaza mereu
+        L.push('--- IFRAME-uri ---');
+        const iframes = [...document.querySelectorAll('iframe')];
+        if (!iframes.length) L.push('  (niciun iframe)');
+        iframes.forEach((f, i) => {
+            let info = `  iframe[${i}] vis=${!!f.offsetParent} id="${f.id || ''}" name="${f.name || ''}" src="${(f.src || '').slice(0, 90)}"`;
+            try {
+                const d = f.contentDocument;
+                if (d) {
+                    const inp = d.querySelectorAll('input[type="text"], input:not([type])').length;
+                    const hasF = /Furnizor/i.test(d.body ? d.body.textContent : '');
+                    info += ` | accesibil: ${inp} inputuri, areFurnizor=${hasF}`;
+                }
+            } catch (e) { info += ' | INACCESIBIL'; }
+            L.push(info);
+        });
+
+        // Recon: containere vizibile care contin "Furnizor" SI "Serie" (cele mai mici = modalul)
+        L.push('--- Containere candidate (Furnizor+Serie, cele mai mici) ---');
+        const cand = [...document.querySelectorAll('div, table, fieldset')]
+            .filter(el => el.offsetParent && !el.closest('#icmed-panel') &&
+                /Furnizor/i.test(el.textContent || '') && /Serie/i.test(el.textContent || ''))
+            .sort((a, b) => (a.textContent || '').length - (b.textContent || '').length)
+            .slice(0, 4);
+        if (!cand.length) L.push('  (niciun container in document principal — probabil e in iframe)');
+        cand.forEach((el, i) => {
+            const s = window.getComputedStyle(el);
+            L.push(`  cand[${i}] <${el.tagName.toLowerCase()} id="${el.id || ''}" class="${el.className || ''}"> pos=${s.position} z=${s.zIndex} display=${s.display} inputuri=${el.querySelectorAll('input').length}`);
+        });
+        if (cand[0]) { L.push('--- HTML container minim (max 6000) ---'); L.push((cand[0].outerHTML || '').slice(0, 6000)); }
 
         ['Factura/Proces', 'Nota receptie'].forEach(lab => {
             let el = null;

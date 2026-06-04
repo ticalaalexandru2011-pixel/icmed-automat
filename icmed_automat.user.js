@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.20
+// @version      1.21
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -615,9 +615,15 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         }
         // 3. Campurile — DUPA furnizor (ca sa nu le stearga postback-ul), dupa id-urile reale din iframe
         const mon = v => String(v == null ? '' : v).replace('.', ','); // separator zecimal romanesc
+        // ia inputul VIZIBIL dupa fragment de id/name (evita gemenii ascunsi din ASP.NET)
+        const inpVizibil = frag => [...doc.querySelectorAll(`input[id*="${frag}"], input[name*="${frag}"]`)]
+            .find(i => i.offsetParent && i.type !== 'hidden');
         const setCamp = (frag, label, val) => {
-            let inp = doc.querySelector(`input[id*="${frag}"], input[name*="${frag}"]`) || campInPopup(doc, label);
-            if (inp && val !== '' && val != null) seteazaValoare(inp, String(val));
+            const inp = inpVizibil(frag) || campInPopup(doc, label);
+            if (inp && val !== '' && val != null) {
+                seteazaValoare(inp, String(val));
+                inp.dispatchEvent(new Event('blur', { bubbles: true }));
+            }
         };
         setCamp('txtValoareFaraTVA', 'Valoare fara',   mon(antet.bazaTva));
         setCamp('txtValoareTVA',     'Valoare tva',    mon(antet.tva));
@@ -625,6 +631,11 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         setCamp('txtSeriaFacturii',  'Serie',          antet.serie);
         setCamp('txtNrFactura',      'Numar',          antet.numar);
         setCamp('txtDataFactura',    'Data',           antet.dataICmed); // "Data scadenta" ramane goala
+
+        // re-verifica Valoare totala (uneori e recalculata/golita de evenimente)
+        await sleep(300);
+        const tot = inpVizibil('txtValoareTotala');
+        if (tot && !tot.value.trim()) { seteazaValoare(tot, mon(antet.totalStr)); tot.dispatchEvent(new Event('blur', { bubbles: true })); }
 
         if (ANTET_SALVEAZA) await salveazaModal(doc);
     }

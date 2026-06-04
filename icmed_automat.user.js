@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.19
+// @version      1.20
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -197,6 +197,7 @@
             dataICmed:  primaZiLuna(dataFactura),
             bazaTva:    g('baza_tva'),
             tva:        g('tva'),
+            totalStr:   g('total'),
             total:      parseFloat(g('total')) || 0,
         };
     }
@@ -598,25 +599,32 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         const btn = gasesteImgDupaNume('btnAddFactura') || gasesteButonAdauga('Factura/Proces');
         if (!btn) throw new Error('nu gasesc butonul + de la Factura');
         btn.click();
-        const doc = await asteapta(() => gasesteModalDoc(), T_POPUP);
+        let doc = await asteapta(() => gasesteModalDoc(), T_POPUP);
         if (!doc) throw new Error('modalul Factura (iframe) nu s-a deschis');
         await sleep(500);
 
-        // Furnizor dupa CUI
+        // 1. Furnizor dupa CUI — POATE declansa un postback ASP.NET in iframe (reincarca formularul)
         await selecteazaFurnizor(doc, antet.cui);
+        await sleep(1800);                 // asteptam sa se termine postback-ul de furnizor
+        doc = gasesteModalDoc() || doc;    // re-gasim documentul (iframe-ul s-a putut reincarca)
 
-        // Tip: implicit Factura; daca e proces verbal, bifeaza al 2-lea radio
+        // 2. Tip
         if (antet.tip === 'proces') {
             const radios = [...doc.querySelectorAll('input[type="radio"]')].filter(r => r.offsetParent);
             if (radios[1]) radios[1].click();
         }
-        const set = (label, val) => { const inp = campInPopup(doc, label); if (inp && val !== '' && val != null) seteazaValoare(inp, String(val)); };
-        set('Valoare fara', antet.bazaTva);
-        set('Valoare tva',  antet.tva);
-        set('Valoare totala', antet.total);
-        set('Serie', antet.serie);
-        set('Numar', antet.numar);
-        set('Data',  antet.dataICmed); // "Data scadenta" ramane goala
+        // 3. Campurile — DUPA furnizor (ca sa nu le stearga postback-ul), dupa id-urile reale din iframe
+        const mon = v => String(v == null ? '' : v).replace('.', ','); // separator zecimal romanesc
+        const setCamp = (frag, label, val) => {
+            let inp = doc.querySelector(`input[id*="${frag}"], input[name*="${frag}"]`) || campInPopup(doc, label);
+            if (inp && val !== '' && val != null) seteazaValoare(inp, String(val));
+        };
+        setCamp('txtValoareFaraTVA', 'Valoare fara',   mon(antet.bazaTva));
+        setCamp('txtValoareTVA',     'Valoare tva',    mon(antet.tva));
+        setCamp('txtValoareTotala',  'Valoare totala', mon(antet.totalStr));
+        setCamp('txtSeriaFacturii',  'Serie',          antet.serie);
+        setCamp('txtNrFactura',      'Numar',          antet.numar);
+        setCamp('txtDataFactura',    'Data',           antet.dataICmed); // "Data scadenta" ramane goala
 
         if (ANTET_SALVEAZA) await salveazaModal(doc);
     }

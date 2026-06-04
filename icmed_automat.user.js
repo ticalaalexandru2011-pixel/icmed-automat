@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.14
+// @version      1.15
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -1399,8 +1399,7 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
                 ta.style.display = 'block';
                 ta.focus(); ta.select();
             }
-            // 2. trimite la webhook (ca sa-l citeasca Claude)
-            if (!dbgGetUrl()) dbgCereUrl();
+            // 2. trimite la webhook DOAR daca e setat un URL (din meniu) — fara prompt enervant
             if (dbgGetUrl()) {
                 status.textContent = '🐞 Trimit debug la webhook…';
                 try {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.26
+// @version      1.27
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -662,10 +662,15 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         setCamp('txtNrFactura',      'Numar',          antet.numar);
         setCamp('txtDataFactura',    'Data',           antet.dataICmed); // "Data scadenta" ramane goala
 
-        // dupa ce s-a "asezat" (cota declanseaza calcul), re-asiguram totala daca s-a golit
-        await sleep(700);
-        const tot = inpVizibil('txtValoareTotala');
-        if (tot && !tot.value.trim()) seteazaValoare(tot, mon(antet.totalStr));
+        // Valoare totala (si fara) se pot goli async (postback furnizor intarziat).
+        // Cu cota=0 setata, valorile sunt consistente -> le re-completam persistent ~2.7s.
+        for (let i = 0; i < 9; i++) {
+            await sleep(300);
+            const f = inpVizibil('txtValoareFaraTVA');
+            if (f && !f.value.trim()) seteazaValoare(f, mon(antet.bazaTva));
+            const t = inpVizibil('txtValoareTotala');
+            if (t && !t.value.trim()) seteazaValoare(t, mon(antet.totalStr));
+        }
 
         if (ANTET_SALVEAZA) await salveazaModal(doc);
     }

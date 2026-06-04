@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.18
+// @version      1.19
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -60,6 +60,10 @@
     // ── AI (rezerva pentru buc/cutie nedetectat) ──────────────────────────────
     // Modelul Claude folosit la cautarea pe net. Sonnet 4.6 = echilibru pret/acuratete
     // (cativa centi/cautare, doar cand apesi butonul). Pune 'claude-haiku-4-5' pentru mai ieftin.
+    // Cand e false, completarea antetului NU apasa Salveaza (doar umple campurile, ca sa verifici).
+    // Pune true cand totul merge, ca sa salveze automat.
+    const ANTET_SALVEAZA = false;
+
     const AI_MODEL   = 'claude-sonnet-4-6';
     const AI_KEY_GM  = 'icmed-anthropic-key'; // cheia API, stocata prin GM_setValue (nu in cod)
     const DBG_URL_GM = 'icmed-debug-url';     // URL webhook.site pt. trimitere debug (stocat local, nu in cod)
@@ -495,21 +499,28 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         return cand[0] || null;
     }
 
-    // Inputul de langa o eticheta, DAR doar in interiorul unui popup (ca sa nu nimerim campuri din pagina)
+    // Inputul de langa o eticheta, in interiorul unui popup/document (ex. iframe-ul modalului)
     function campInPopup(popup, text) {
         if (!popup) return null;
-        const labels = [...popup.querySelectorAll('td, th, label, span, div')];
-        const lab = labels.find(el => {
-            const t = el.textContent.trim().replace(':', '').trim();
-            return t.startsWith(text) && t.length <= text.length + 12 && !el.querySelector('input');
+        const norm = s => (s || '').trim().replace(/:\s*$/, '').trim();
+        const tl = text.toLowerCase();
+        const lab = [...popup.querySelectorAll('td, th, label, span, div')].find(el => {
+            const t = norm(el.textContent);
+            return t.toLowerCase().startsWith(tl) && t.length <= text.length + 14 && !el.querySelector('input, select, textarea');
         });
         if (!lab) return null;
-        const inputs = [...popup.querySelectorAll('input[type="text"], input:not([type])')]
-            .filter(i => i.offsetParent && i.type !== 'hidden');
-        for (const inp of inputs) {
-            if (lab.compareDocumentPosition(inp) & Node.DOCUMENT_POSITION_FOLLOWING) return inp;
+        const okInput = i => i.offsetParent && !['hidden', 'image', 'checkbox', 'radio', 'button', 'submit'].includes(i.type);
+        // 1. acelasi rand (tr): inputul de dupa eticheta
+        const tr = lab.closest('tr');
+        if (tr) {
+            const ins = [...tr.querySelectorAll('input')].filter(okInput);
+            for (const inp of ins) if (lab.compareDocumentPosition(inp) & Node.DOCUMENT_POSITION_FOLLOWING) return inp;
+            if (ins[0]) return ins[0];
         }
-        return inputs[0] || null;
+        // 2. primul input vizibil de dupa eticheta, oriunde in popup
+        const all = [...popup.querySelectorAll('input')].filter(okInput);
+        for (const inp of all) if (lab.compareDocumentPosition(inp) & Node.DOCUMENT_POSITION_FOLLOWING) return inp;
+        return null;
     }
 
     // Modalul de creare Factura/Nota e intr-un IFRAME (ModalDialogBoxImpl_iframe). Intoarce documentul lui.
@@ -607,7 +618,7 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         set('Numar', antet.numar);
         set('Data',  antet.dataICmed); // "Data scadenta" ramane goala
 
-        await salveazaModal(doc);
+        if (ANTET_SALVEAZA) await salveazaModal(doc);
     }
 
     async function completeazaNota(antet) {
@@ -628,7 +639,7 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         const dataInp = campInPopup(doc, 'Data');
         if (dataInp && antet.dataICmed) seteazaValoare(dataInp, antet.dataICmed);
 
-        await salveazaModal(doc);
+        if (ANTET_SALVEAZA) await salveazaModal(doc);
     }
 
     // ── Stare antet: stim daca factura+nota au fost deja introduse ─────────────
@@ -1582,12 +1593,17 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
             btn.textContent = 'Se completeaza Factura…';
             try {
                 await completeazaFactura(antetCurent);
-                btn.textContent = 'Se completeaza Nota…';
-                await sleep(500);
-                await completeazaNota(antetCurent);
-                marcheazaAntetDone(antetCurent);
-                btn.style.background = '#2e7d32';
-                btn.textContent = '✅ Antet introdus — verifica, apoi treci la produse';
+                if (ANTET_SALVEAZA) {
+                    btn.textContent = 'Se completeaza Nota…';
+                    await sleep(500);
+                    await completeazaNota(antetCurent);
+                    marcheazaAntetDone(antetCurent);
+                    btn.style.background = '#2e7d32';
+                    btn.textContent = '✅ Antet introdus — verifica, apoi treci la produse';
+                } else {
+                    btn.style.background = '#ef6c00';
+                    btn.textContent = '🔎 Campuri completate (FARA save) — verifica modalul';
+                }
                 btn.disabled = false;
             } catch (err) {
                 btn.textContent = '⚠ ' + (err.message || 'eroare') + ' — incearca manual';

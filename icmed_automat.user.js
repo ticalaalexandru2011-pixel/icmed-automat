@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.30
+// @version      1.31
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -671,8 +671,10 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         await pune('txtDataFactura',    antet.dataICmed); // "Data scadenta" ramane goala
 
         // "Valoare totala": campul cere CLICK ca sa devina editabil (Tab nu ajunge la el).
-        // Deci: click (mousedown+click+focus) -> scriem valoarea -> blur.
+        // Punem ACELASI numar ca in "Valoare fara tva" (citit de pe ecran) -> identice garantat.
         doc = gasesteModalDoc() || doc;
+        const faraInp = vis(doc, 'txtValoareFaraTVA');
+        const valTotala = (faraInp && faraInp.value.trim()) ? faraInp.value.trim() : mon(antet.totalStr);
         const tot = vis(doc, 'txtValoareTotala');
         if (tot) {
             tot.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
@@ -682,7 +684,7 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
             await sleep(150);
             // campul accepta doar taste reale -> simulam tastarea caracter cu caracter
             tot.value = '';
-            const txt = mon(antet.totalStr);
+            const txt = valTotala;
             for (const ch of txt) {
                 tot.value += ch;
                 tot.dispatchEvent(new KeyboardEvent('keydown',  { key: ch, bubbles: true }));

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.17
+// @version      1.18
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -513,11 +513,14 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
     }
 
     // Modalul de creare Factura/Nota e intr-un IFRAME (ModalDialogBoxImpl_iframe). Intoarce documentul lui.
+    // Detectie robusta: iframe vizibil, same-origin, cu cel putin 2 inputuri text vizibile.
     function gasesteModalDoc() {
         const ifr = [...document.querySelectorAll('iframe')].find(f => {
-            if (!f.offsetParent) return false;
+            if (!f.offsetParent && !/ModalDialog/i.test(f.id || '')) return false;
             let d; try { d = f.contentDocument; } catch (e) { return false; }
-            return d && d.body && /Renunt|Salv/i.test(d.body.textContent || '');
+            if (!d || !d.body) return false;
+            const inp = [...d.body.querySelectorAll('input[type="text"], input:not([type])')].filter(i => i.offsetParent);
+            return inp.length >= 2;
         });
         if (!ifr) return null;
         try { return ifr.contentDocument; } catch (e) { return null; }
@@ -584,12 +587,9 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         const btn = gasesteImgDupaNume('btnAddFactura') || gasesteButonAdauga('Factura/Proces');
         if (!btn) throw new Error('nu gasesc butonul + de la Factura');
         btn.click();
-        const doc = await asteapta(() => {
-            const d = gasesteModalDoc();
-            return d && campInPopup(d, 'Serie') ? d : null;
-        }, T_POPUP);
+        const doc = await asteapta(() => gasesteModalDoc(), T_POPUP);
         if (!doc) throw new Error('modalul Factura (iframe) nu s-a deschis');
-        await sleep(300);
+        await sleep(500);
 
         // Furnizor dupa CUI
         await selecteazaFurnizor(doc, antet.cui);
@@ -614,12 +614,9 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         const btn = gasesteImgDupaNume('btnNotaRec') || gasesteButonAdauga('Nota receptie');
         if (!btn) throw new Error('nu gasesc butonul + de la Nota receptie');
         btn.click();
-        const doc = await asteapta(() => {
-            const d = gasesteModalDoc();
-            return d && campInPopup(d, 'Numar') ? d : null;
-        }, T_POPUP);
+        const doc = await asteapta(() => gasesteModalDoc(), T_POPUP);
         if (!doc) throw new Error('modalul Nota (iframe) nu s-a deschis');
-        await sleep(300);
+        await sleep(500);
 
         const numarInp = campInPopup(doc, 'Numar');
         if (numarInp) {

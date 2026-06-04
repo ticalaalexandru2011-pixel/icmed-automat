@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.21
+// @version      1.22
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -620,22 +620,21 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
             .find(i => i.offsetParent && i.type !== 'hidden');
         const setCamp = (frag, label, val) => {
             const inp = inpVizibil(frag) || campInPopup(doc, label);
-            if (inp && val !== '' && val != null) {
-                seteazaValoare(inp, String(val));
-                inp.dispatchEvent(new Event('blur', { bubbles: true }));
-            }
+            if (inp && val !== '' && val != null) seteazaValoare(inp, String(val));
         };
-        setCamp('txtValoareFaraTVA', 'Valoare fara',   mon(antet.bazaTva));
-        setCamp('txtValoareTVA',     'Valoare tva',    mon(antet.tva));
-        setCamp('txtValoareTotala',  'Valoare totala', mon(antet.totalStr));
-        setCamp('txtSeriaFacturii',  'Serie',          antet.serie);
-        setCamp('txtNrFactura',      'Numar',          antet.numar);
-        setCamp('txtDataFactura',    'Data',           antet.dataICmed); // "Data scadenta" ramane goala
+        setCamp('txtSeriaFacturii',  'Serie',        antet.serie);
+        setCamp('txtNrFactura',      'Numar',        antet.numar);
+        setCamp('txtDataFactura',    'Data',         antet.dataICmed); // "Data scadenta" ramane goala
+        setCamp('txtValoareFaraTVA', 'Valoare fara', mon(antet.bazaTva));
+        setCamp('txtValoareTVA',     'Valoare tva',  mon(antet.tva));
 
-        // re-verifica Valoare totala (uneori e recalculata/golita de evenimente)
-        await sleep(300);
-        const tot = inpVizibil('txtValoareTotala');
-        if (tot && !tot.value.trim()) { seteazaValoare(tot, mon(antet.totalStr)); tot.dispatchEvent(new Event('blur', { bubbles: true })); }
+        // Valoare totala: iCmed o recalculeaza/goleste async cand schimbi fara/tva,
+        // asa ca o fortam de mai multe ori ca sa "castige" ultima setare.
+        for (let i = 0; i < 4; i++) {
+            const tot = inpVizibil('txtValoareTotala');
+            if (tot) seteazaValoare(tot, mon(antet.totalStr));
+            await sleep(250);
+        }
 
         if (ANTET_SALVEAZA) await salveazaModal(doc);
     }

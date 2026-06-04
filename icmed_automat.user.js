@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.27
+// @version      1.28
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -638,39 +638,33 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
             const radios = [...doc.querySelectorAll('input[type="radio"]')].filter(r => r.offsetParent);
             if (radios[1]) radios[1].click();
         }
-        // 3. Campurile — DUPA furnizor (ca sa nu le stearga postback-ul), dupa id-urile reale din iframe
+        // 3. Campurile — PE RAND, cu pauza dupa fiecare (iCmed face un mic refresh/postback
+        //    dupa fiecare camp; daca le punem rapid, refresh-ul de la unul il sterge pe urmatorul).
         const mon = v => String(v == null ? '' : v).replace('.', ','); // separator zecimal romanesc
-        // ia inputul VIZIBIL dupa fragment de id/name (evita gemenii ascunsi din ASP.NET)
-        const inpVizibil = frag => [...doc.querySelectorAll(`input[id*="${frag}"], input[name*="${frag}"]`)]
+        const T_REFRESH = 800; // pauza ca sa se aseze micul refresh dupa fiecare camp
+        const vis = (d, frag) => [...d.querySelectorAll(`input[id*="${frag}"], input[name*="${frag}"]`)]
             .find(i => i.offsetParent && i.type !== 'hidden');
-        const setCamp = (frag, label, val) => {
-            const inp = inpVizibil(frag) || campInPopup(doc, label);
+
+        // pune un camp (dupa fragment de id), re-gaseste doc-ul, apoi asteapta refresh-ul
+        const pune = async (frag, val) => {
+            doc = gasesteModalDoc() || doc;
+            const inp = vis(doc, frag);
             if (inp && val !== '' && val != null) seteazaValoare(inp, String(val));
+            await sleep(T_REFRESH);
         };
-        // CHEIE: setam intai COTA TVA (campul mic "TVA:", dropdown) = procent. iCmed calculeaza
-        // tva/totala din fara × cota; fara cota era inconsistent si golea campurile.
-        // Calculam cota LOCAL (coada salvata in localStorage poate avea antet vechi fara cotaTva).
+
         const baza = parseFloat(String(antet.bazaTva).replace(',', '.')) || 0;
         const tvaV = parseFloat(String(antet.tva).replace(',', '.')) || 0;
         const cota = (baza > 0 && tvaV > 0) ? Math.round(tvaV / baza * 100) : 0;
-        setCotaTva(doc, cota);
 
-        setCamp('txtValoareFaraTVA', 'Valoare fara',   mon(antet.bazaTva));
-        setCamp('txtValoareTVA',     'Valoare tva',    mon(antet.tva));
-        setCamp('txtValoareTotala',  'Valoare totala', mon(antet.totalStr));
-        setCamp('txtSeriaFacturii',  'Serie',          antet.serie);
-        setCamp('txtNrFactura',      'Numar',          antet.numar);
-        setCamp('txtDataFactura',    'Data',           antet.dataICmed); // "Data scadenta" ramane goala
-
-        // Valoare totala (si fara) se pot goli async (postback furnizor intarziat).
-        // Cu cota=0 setata, valorile sunt consistente -> le re-completam persistent ~2.7s.
-        for (let i = 0; i < 9; i++) {
-            await sleep(300);
-            const f = inpVizibil('txtValoareFaraTVA');
-            if (f && !f.value.trim()) seteazaValoare(f, mon(antet.bazaTva));
-            const t = inpVizibil('txtValoareTotala');
-            if (t && !t.value.trim()) seteazaValoare(t, mon(antet.totalStr));
-        }
+        // ordine: cota TVA -> fara -> tva -> serie -> numar -> data -> TOTALA (ultima)
+        doc = gasesteModalDoc() || doc; setCotaTva(doc, cota); await sleep(T_REFRESH);
+        await pune('txtValoareFaraTVA', mon(antet.bazaTva));
+        await pune('txtValoareTVA',     mon(antet.tva));
+        await pune('txtSeriaFacturii',  antet.serie);
+        await pune('txtNrFactura',      antet.numar);
+        await pune('txtDataFactura',    antet.dataICmed); // "Data scadenta" ramane goala
+        await pune('txtValoareTotala',  mon(antet.totalStr)); // ULTIMA, dupa ce totul s-a asezat
 
         if (ANTET_SALVEAZA) await salveazaModal(doc);
     }

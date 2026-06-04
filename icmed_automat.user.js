@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.25
+// @version      1.26
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -598,6 +598,28 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         return false;
     }
 
+    // Seteaza COTA TVA (campul mic "TVA:") — poate fi <select> sau input text. `cota` = procent (ex. 0, 9, 19)
+    function setCotaTva(doc, cota) {
+        let lab = null;
+        for (const el of doc.querySelectorAll('td, th, label, span')) {
+            const t = el.textContent.trim().replace(/:\s*$/, '').trim();
+            if (/^TVA$/i.test(t)) { lab = el; break; } // exact "TVA", nu "Valoare tva"
+        }
+        if (!lab) return false;
+        const scope = lab.closest('tr') || doc;
+        // 1. dropdown nativ <select>
+        const sel = [...scope.querySelectorAll('select')].find(s => s.offsetParent);
+        if (sel) {
+            const opt = [...sel.options].find(o => parseInt(o.value, 10) === cota || parseInt(o.textContent, 10) === cota);
+            if (opt) { sel.value = opt.value; sel.dispatchEvent(new Event('change', { bubbles: true })); return true; }
+        }
+        // 2. input text dupa eticheta
+        const inp = [...scope.querySelectorAll('input[type="text"], input:not([type])')]
+            .find(i => i.offsetParent && i.type !== 'hidden' && (lab.compareDocumentPosition(i) & Node.DOCUMENT_POSITION_FOLLOWING));
+        if (inp) { seteazaValoare(inp, String(cota)); return true; }
+        return false;
+    }
+
     async function completeazaFactura(antet) {
         const btn = gasesteImgDupaNume('btnAddFactura') || gasesteButonAdauga('Factura/Proces');
         if (!btn) throw new Error('nu gasesc butonul + de la Factura');
@@ -625,10 +647,13 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
             const inp = inpVizibil(frag) || campInPopup(doc, label);
             if (inp && val !== '' && val != null) seteazaValoare(inp, String(val));
         };
-        // CHEIE: setam intai COTA TVA (campul mic "TVA:") = procent. iCmed calculeaza
+        // CHEIE: setam intai COTA TVA (campul mic "TVA:", dropdown) = procent. iCmed calculeaza
         // tva/totala din fara × cota; fara cota era inconsistent si golea campurile.
-        const cotaInp = campInPopup(doc, 'TVA');
-        if (cotaInp) seteazaValoare(cotaInp, String(antet.cotaTva));
+        // Calculam cota LOCAL (coada salvata in localStorage poate avea antet vechi fara cotaTva).
+        const baza = parseFloat(String(antet.bazaTva).replace(',', '.')) || 0;
+        const tvaV = parseFloat(String(antet.tva).replace(',', '.')) || 0;
+        const cota = (baza > 0 && tvaV > 0) ? Math.round(tvaV / baza * 100) : 0;
+        setCotaTva(doc, cota);
 
         setCamp('txtValoareFaraTVA', 'Valoare fara',   mon(antet.bazaTva));
         setCamp('txtValoareTVA',     'Valoare tva',    mon(antet.tva));
@@ -827,8 +852,14 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
             });
             const fdrop = mdoc.querySelector('input[type="image"][id*="Furnizor"][id*="Drop"], input[type="image"][name*="Furnizor"][name*="Drop"]');
             L.push('  drop Furnizor: ' + elInfo(fdrop));
-            L.push('--- HTML MODAL (iframe body, max 9000) ---');
-            L.push(((mdoc.body && mdoc.body.innerHTML) || '').slice(0, 9000));
+            // selecturi (dropdown-uri) din modal — ex. cota TVA
+            mdoc.querySelectorAll('select').forEach((s, i) => {
+                if (s.offsetParent) L.push(`  select[${i}]: id="${s.id}" name="${s.name}" optiuni=[${[...s.options].map(o => o.value).join(',')}]`);
+            });
+            // zona valorilor/cota TVA (randul/tabelul lui txtValoareFaraTVA) — ocoleste viewstate-ul
+            const vf = mdoc.querySelector('input[id*="txtValoareFaraTVA"], input[name*="txtValoareFaraTVA"]');
+            const zonaTbl = vf && vf.closest('table');
+            if (zonaTbl) { L.push('--- HTML zona valori/TVA (max 6000) ---'); L.push((zonaTbl.outerHTML || '').slice(0, 6000)); }
         } else {
             L.push('--- MODAL (iframe): NEDETECTAT (deschide popup-ul Factura/Nota inainte de Debug) ---');
         }

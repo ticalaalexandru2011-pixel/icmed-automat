@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.23
+// @version      1.24
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -622,18 +622,14 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
             const inp = inpVizibil(frag) || campInPopup(doc, label);
             if (inp && val !== '' && val != null) seteazaValoare(inp, String(val));
         };
-        setCamp('txtSeriaFacturii',  'Serie',        antet.serie);
-        setCamp('txtNrFactura',      'Numar',        antet.numar);
-        setCamp('txtDataFactura',    'Data',         antet.dataICmed); // "Data scadenta" ramane goala
-        setCamp('txtValoareFaraTVA', 'Valoare fara', mon(antet.bazaTva));
-        setCamp('txtValoareTVA',     'Valoare tva',  mon(antet.tva));
-
-        // iCmed are calcul bidirectional: setarea fara/tva recalculeaza async "totala"
-        // (si o goleste), iar fortarea repetata a "totala" goleste fara/tva. Solutia:
-        // asteptam recalcularea, apoi setam "totala" O SINGURA data (nu sterge fara/tva).
-        await sleep(900);
-        const tot = inpVizibil('txtValoareTotala');
-        if (tot && !tot.value.trim()) seteazaValoare(tot, mon(antet.totalStr));
+        // Ordinea ca in v1.20 (care lasa fara/tva completate). Fara delay/bucla — ele
+        // declansau recalcularea async a iCmed care golea campurile.
+        setCamp('txtValoareFaraTVA', 'Valoare fara',   mon(antet.bazaTva));
+        setCamp('txtValoareTVA',     'Valoare tva',    mon(antet.tva));
+        setCamp('txtValoareTotala',  'Valoare totala', mon(antet.totalStr));
+        setCamp('txtSeriaFacturii',  'Serie',          antet.serie);
+        setCamp('txtNrFactura',      'Numar',          antet.numar);
+        setCamp('txtDataFactura',    'Data',           antet.dataICmed); // "Data scadenta" ramane goala
 
         if (ANTET_SALVEAZA) await salveazaModal(doc);
     }

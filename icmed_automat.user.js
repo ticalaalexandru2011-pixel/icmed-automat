@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.24
+// @version      1.25
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -199,6 +199,9 @@
             tva:        g('tva'),
             totalStr:   g('total'),
             total:      parseFloat(g('total')) || 0,
+            // cota TVA (%) = tva / baza * 100 (0 daca factura e fara TVA)
+            cotaTva:    (parseFloat(g('baza_tva')) > 0 && parseFloat(g('tva')) > 0)
+                          ? Math.round(parseFloat(g('tva')) / parseFloat(g('baza_tva')) * 100) : 0,
         };
     }
 
@@ -622,14 +625,22 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
             const inp = inpVizibil(frag) || campInPopup(doc, label);
             if (inp && val !== '' && val != null) seteazaValoare(inp, String(val));
         };
-        // Ordinea ca in v1.20 (care lasa fara/tva completate). Fara delay/bucla — ele
-        // declansau recalcularea async a iCmed care golea campurile.
+        // CHEIE: setam intai COTA TVA (campul mic "TVA:") = procent. iCmed calculeaza
+        // tva/totala din fara × cota; fara cota era inconsistent si golea campurile.
+        const cotaInp = campInPopup(doc, 'TVA');
+        if (cotaInp) seteazaValoare(cotaInp, String(antet.cotaTva));
+
         setCamp('txtValoareFaraTVA', 'Valoare fara',   mon(antet.bazaTva));
         setCamp('txtValoareTVA',     'Valoare tva',    mon(antet.tva));
         setCamp('txtValoareTotala',  'Valoare totala', mon(antet.totalStr));
         setCamp('txtSeriaFacturii',  'Serie',          antet.serie);
         setCamp('txtNrFactura',      'Numar',          antet.numar);
         setCamp('txtDataFactura',    'Data',           antet.dataICmed); // "Data scadenta" ramane goala
+
+        // dupa ce s-a "asezat" (cota declanseaza calcul), re-asiguram totala daca s-a golit
+        await sleep(700);
+        const tot = inpVizibil('txtValoareTotala');
+        if (tot && !tot.value.trim()) seteazaValoare(tot, mon(antet.totalStr));
 
         if (ANTET_SALVEAZA) await salveazaModal(doc);
     }

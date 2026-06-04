@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.22
+// @version      1.23
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -628,13 +628,12 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         setCamp('txtValoareFaraTVA', 'Valoare fara', mon(antet.bazaTva));
         setCamp('txtValoareTVA',     'Valoare tva',  mon(antet.tva));
 
-        // Valoare totala: iCmed o recalculeaza/goleste async cand schimbi fara/tva,
-        // asa ca o fortam de mai multe ori ca sa "castige" ultima setare.
-        for (let i = 0; i < 4; i++) {
-            const tot = inpVizibil('txtValoareTotala');
-            if (tot) seteazaValoare(tot, mon(antet.totalStr));
-            await sleep(250);
-        }
+        // iCmed are calcul bidirectional: setarea fara/tva recalculeaza async "totala"
+        // (si o goleste), iar fortarea repetata a "totala" goleste fara/tva. Solutia:
+        // asteptam recalcularea, apoi setam "totala" O SINGURA data (nu sterge fara/tva).
+        await sleep(900);
+        const tot = inpVizibil('txtValoareTotala');
+        if (tot && !tot.value.trim()) seteazaValoare(tot, mon(antet.totalStr));
 
         if (ANTET_SALVEAZA) await salveazaModal(doc);
     }

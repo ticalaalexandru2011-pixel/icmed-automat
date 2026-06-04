@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.16
+// @version      1.17
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -512,22 +512,69 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         return inputs[0] || null;
     }
 
-    async function salveazaPopup() {
-        const popup = gasestePopup();
-        const scope = popup || document;
-        const esteSalv = b => /^[^a-z]*salv/i.test((b.value || b.textContent || b.alt || b.title || '').trim());
-        // 1. elemente clar clickabile
-        let btn = [...scope.querySelectorAll('button, input[type="button"], input[type="submit"], input[type="image"], a')]
+    // Modalul de creare Factura/Nota e intr-un IFRAME (ModalDialogBoxImpl_iframe). Intoarce documentul lui.
+    function gasesteModalDoc() {
+        const ifr = [...document.querySelectorAll('iframe')].find(f => {
+            if (!f.offsetParent) return false;
+            let d; try { d = f.contentDocument; } catch (e) { return false; }
+            return d && d.body && /Renunt|Salv/i.test(d.body.textContent || '');
+        });
+        if (!ifr) return null;
+        try { return ifr.contentDocument; } catch (e) { return null; }
+    }
+
+    // Butonul de cautare/drop din randul unei etichete, INTR-UN document dat (iframe)
+    function gasesteButonCautareInDoc(doc, label) {
+        let lab = null;
+        for (const el of doc.querySelectorAll('td, th, label')) {
+            if (el.textContent.trim().replace(':', '').trim().startsWith(label)) { lab = el; break; }
+        }
+        const row = lab && (lab.closest('tr') || lab.parentElement);
+        if (!row) return null;
+        return [...row.querySelectorAll('input[type="image"], img, button, a')]
+            .filter(e => e.offsetParent && !/del|clear|erase|cancel|sterge/i.test((e.src || e.name || e.id || '')))[0] || null;
+    }
+
+    // Selecteaza furnizorul dupa CUI in combobox-ul din modal (iframe doc)
+    async function selecteazaFurnizor(doc, cui) {
+        if (!cui) return;
+        const drop = doc.querySelector('input[type="image"][id*="Furnizor"][id*="Drop"], input[type="image"][name*="Furnizor"][name*="Drop"]')
+            || gasesteButonCautareInDoc(doc, 'Furnizor');
+        if (!drop) return;
+        drop.click();
+        const sInput = await asteapta(() => {
+            const all = [...doc.querySelectorAll('input[id*="Furnizor"][id*="Search"], input[name*="Furnizor"][name*="Search"], input[name*="$Search"]')].filter(i => i.offsetParent);
+            return all[0] || null;
+        }, T_POPUP);
+        if (!sInput) return;
+        sInput.focus();
+        sInput.value = cui;
+        sInput.dispatchEvent(new Event('input', { bubbles: true }));
+        sInput.dispatchEvent(new Event('change', { bubbles: true }));
+        await sleep(T_TYPE);
+        // declanseaza cautarea: butonul de search (cu typo "Serach" in iCmed) sau Enter
+        const searchBtn = doc.querySelector('input[type="image"][id*="Furnizor"][id*="erac"], input[type="image"][name*="Furnizor"][name*="erac"]');
+        if (searchBtn) searchBtn.click(); else trimiteEnter(sInput);
+        await sleep(T_FILTER);
+        // alege randul care contine CUI-ul
+        const rand = [...doc.querySelectorAll('tr.pop_row, tr')].find(r => r.offsetParent && (r.textContent || '').includes(cui));
+        if (rand) {
+            const cell = rand.querySelector('td[onclick]') || rand.querySelector('td') || rand;
+            cell.click();
+            await sleep(T_CLICK);
+        }
+    }
+
+    // Salveaza modalul (iframe doc)
+    async function salveazaModal(doc) {
+        const esteSalv = b => /salv/i.test((b.value || b.textContent || b.alt || b.title || b.name || b.id || ''));
+        let btn = [...doc.querySelectorAll('input[type="image"], input[type="button"], input[type="submit"], button, a')]
             .find(b => b.offsetParent && esteSalv(b));
-        // 2. altfel un span/div/td cu text scurt "Salveaza" (eventual click pe iconita-sora)
         if (!btn) {
-            const txt = [...scope.querySelectorAll('span, div, td')]
+            const txt = [...doc.querySelectorAll('span, div, td')]
                 .filter(b => b.offsetParent && /salv/i.test(b.textContent || '') && (b.textContent || '').trim().length < 20)
                 .sort((a, b) => a.textContent.length - b.textContent.length)[0];
-            if (txt) {
-                const sib = txt.previousElementSibling || txt.nextElementSibling;
-                btn = (sib && (sib.tagName === 'IMG' || sib.tagName === 'A')) ? sib : txt;
-            }
+            if (txt) { const sib = txt.previousElementSibling || txt.nextElementSibling; btn = (sib && /IMG|A|INPUT/.test(sib.tagName)) ? sib : txt; }
         }
         if (btn) { btn.click(); await sleep(T_SAVE); await inchideDialogAvertisment(); return true; }
         return false;
@@ -537,77 +584,54 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         const btn = gasesteImgDupaNume('btnAddFactura') || gasesteButonAdauga('Factura/Proces');
         if (!btn) throw new Error('nu gasesc butonul + de la Factura');
         btn.click();
-        const deschis = await asteapta(() => {
-            const p = gasestePopup();
-            return p && campInPopup(p, 'Serie') ? p : null;
+        const doc = await asteapta(() => {
+            const d = gasesteModalDoc();
+            return d && campInPopup(d, 'Serie') ? d : null;
         }, T_POPUP);
-        if (!deschis) throw new Error('popup-ul Factura nu s-a deschis');
+        if (!doc) throw new Error('modalul Factura (iframe) nu s-a deschis');
         await sleep(300);
 
-        // Furnizor — cauta dupa CUI in popup-ul de furnizor
-        const furnBtn = gasesteButonCautareIn(gasesteRandDupaLabel('Furnizor'));
-        if (furnBtn && antet.cui) {
-            furnBtn.click();
-            const sInput = await asteapta(() => {
-                const p = gasestePopup();
-                return p ? p.querySelector('input[type="text"], input:not([type])') : null;
-            }, T_POPUP);
-            if (sInput) {
-                sInput.focus();
-                sInput.value = antet.cui;
-                sInput.dispatchEvent(new Event('input',  { bubbles: true }));
-                sInput.dispatchEvent(new Event('change', { bubbles: true }));
-                await sleep(T_TYPE);
-                trimiteEnter(sInput);
-                await sleep(T_FILTER);
-                const p2 = gasestePopup();
-                if (p2) {
-                    const rows = [...p2.querySelectorAll('tr')].filter(r => r.cells.length > 1 && r.offsetParent);
-                    const prima = rows.find(r => r.closest('tbody')) || rows[0];
-                    if (prima) { prima.click(); await sleep(T_CLICK); }
-                }
-            }
-        }
+        // Furnizor dupa CUI
+        await selecteazaFurnizor(doc, antet.cui);
 
-        const popup = gasestePopup();
         // Tip: implicit Factura; daca e proces verbal, bifeaza al 2-lea radio
         if (antet.tip === 'proces') {
-            const radios = [...popup.querySelectorAll('input[type="radio"]')].filter(r => r.offsetParent);
-            if (radios[1]) { radios[1].click(); }
+            const radios = [...doc.querySelectorAll('input[type="radio"]')].filter(r => r.offsetParent);
+            if (radios[1]) radios[1].click();
         }
-        const set = (label, val) => { const inp = campInPopup(popup, label); if (inp && val !== '' && val != null) seteazaValoare(inp, String(val)); };
+        const set = (label, val) => { const inp = campInPopup(doc, label); if (inp && val !== '' && val != null) seteazaValoare(inp, String(val)); };
         set('Valoare fara', antet.bazaTva);
         set('Valoare tva',  antet.tva);
         set('Valoare totala', antet.total);
         set('Serie', antet.serie);
         set('Numar', antet.numar);
-        set('Data',  antet.dataICmed); // primul "Data" = data facturii; "Data scadenta" ramane goala
+        set('Data',  antet.dataICmed); // "Data scadenta" ramane goala
 
-        await salveazaPopup();
+        await salveazaModal(doc);
     }
 
     async function completeazaNota(antet) {
         const btn = gasesteImgDupaNume('btnNotaRec') || gasesteButonAdauga('Nota receptie');
         if (!btn) throw new Error('nu gasesc butonul + de la Nota receptie');
         btn.click();
-        const popup = await asteapta(() => {
-            const p = gasestePopup();
-            return p && campInPopup(p, 'Numar') ? p : null;
+        const doc = await asteapta(() => {
+            const d = gasesteModalDoc();
+            return d && campInPopup(d, 'Numar') ? d : null;
         }, T_POPUP);
-        if (!popup) throw new Error('popup-ul Nota nu s-a deschis');
+        if (!doc) throw new Error('modalul Nota (iframe) nu s-a deschis');
         await sleep(300);
 
-        const numarInp = campInPopup(popup, 'Numar');
+        const numarInp = campInPopup(doc, 'Numar');
         if (numarInp) {
             const afisat = parseInt((numarInp.value || '').replace(/\D/g, ''), 10) || 0;
             const nrNou = Math.max(afisat + 1, ultimNotaNr + 1);
             ultimNotaNr = nrNou;
             seteazaValoare(numarInp, String(nrNou));
         }
-        const dataInp = campInPopup(popup, 'Data');
+        const dataInp = campInPopup(doc, 'Data');
         if (dataInp && antet.dataICmed) seteazaValoare(dataInp, antet.dataICmed);
 
-        await salveazaPopup();
+        await salveazaModal(doc);
     }
 
     // ── Stare antet: stim daca factura+nota au fost deja introduse ─────────────
@@ -760,7 +784,22 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
             const s = window.getComputedStyle(el);
             L.push(`  cand[${i}] <${el.tagName.toLowerCase()} id="${el.id || ''}" class="${el.className || ''}"> pos=${s.position} z=${s.zIndex} display=${s.display} inputuri=${el.querySelectorAll('input').length}`);
         });
-        if (cand[0]) { L.push('--- HTML container minim (max 6000) ---'); L.push((cand[0].outerHTML || '').slice(0, 6000)); }
+        if (cand[0]) { L.push('--- HTML container minim (max 4000) ---'); L.push((cand[0].outerHTML || '').slice(0, 4000)); }
+
+        // Modalul real (iframe): campuri detectate + HTML interior
+        const mdoc = gasesteModalDoc();
+        if (mdoc) {
+            L.push('--- MODAL (iframe) — campuri detectate ---');
+            ['Furnizor', 'Valoare fara', 'Valoare tva', 'Valoare totala', 'Serie', 'Numar', 'Data', 'Data scadenta'].forEach(lab => {
+                L.push(`  camp "${lab}": ` + elInfo(campInPopup(mdoc, lab)));
+            });
+            const fdrop = mdoc.querySelector('input[type="image"][id*="Furnizor"][id*="Drop"], input[type="image"][name*="Furnizor"][name*="Drop"]');
+            L.push('  drop Furnizor: ' + elInfo(fdrop));
+            L.push('--- HTML MODAL (iframe body, max 9000) ---');
+            L.push(((mdoc.body && mdoc.body.innerHTML) || '').slice(0, 9000));
+        } else {
+            L.push('--- MODAL (iframe): NEDETECTAT (deschide popup-ul Factura/Nota inainte de Debug) ---');
+        }
 
         ['Factura/Proces', 'Nota receptie'].forEach(lab => {
             let el = null;

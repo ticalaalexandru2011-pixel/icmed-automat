@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.32
+// @version      1.33
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -111,13 +111,15 @@
         if (!denumire) return 1;
         // "(BUC)" => cantitatea din XML e deja in bucati individuale (1 buc/cutie)
         if (/\(\s*BUC\s*\)/i.test(denumire)) return 1;
-        const U = '(FI(?:OLE)?|FL(?:ACOANE)?|CPR|CP(?:S|SULE|\\.[\\w.]*)?|CPS|CAPS(?:ULE)?|TB|DR(?:AJEURI)?|COMP(?:R(?:IMATE)?)?|PLIC|SUPOZ(?:ITOARE)?|AMP)';
+        const U = '(FI(?:OLE)?|FL(?:ACOANE)?|CPR|CP(?:S|SULE|\\.[\\w.]*)?|CPS|CAPS(?:ULE)?|TB|DR(?:AJEURI)?|COMP(?:R(?:IMATE)?)?|PLIC|SUPOZ(?:ITOARE)?|AMP|BUC(?:ATI)?)';
+        // (?![A-Za-z]) = unitatea sa NU fie prefixul unui cuvant mai lung (ex. "COMPONENTE" != "COMP")
+        const SF = '(?![A-Za-z])';
         // Format CRISFARM/UNICAFARM: "CT*20FI", "CTX56 CPR" (cutie x N) => N buc/cutie
         let m = denumire.match(/CT\s*[\*xX]\s*(\d+)/i);
         if (m) return parseInt(m[1], 10);
-        m = denumire.match(new RegExp('X\\s*(\\d+)\\s*' + U, 'i'));
+        m = denumire.match(new RegExp('X\\s*(\\d+)\\s*' + U + SF, 'i'));
         if (m) return parseInt(m[1], 10);
-        m = denumire.match(new RegExp('\\b(\\d+)\\s*' + U, 'i'));
+        m = denumire.match(new RegExp('\\b(\\d+)\\s*' + U + SF, 'i'));
         if (m) return parseInt(m[1], 10);
         return null;
     }
@@ -129,6 +131,8 @@
         doc.querySelectorAll('c_xml').forEach(item => {
             const g = tag => (item.querySelector(tag)?.textContent || '').trim();
             const denumire  = g('denumire');
+            const denEf     = g('den_ef'); // numele complet (denumire poate fi trunchiat, ex. "25 BU" vs "25 BUC")
+            const denPtBuc  = (denEf && denEf.length > denumire.length) ? denEf : denumire;
             const cod       = g('cod');
             const w         = codW(cod, denumire, g('text_supl'));
             const lotNr     = lot(g('text_supl'));
@@ -140,7 +144,7 @@
             // Daca TVA > 0 si exista <total>, bagam TVA in pret si punem 0 in formular
             const pretBaza  = tvaArt > 0 && totalXml > 0 ? totalXml : valoare;
             const tva       = '0';
-            const bucCutieRaw     = bucatiPerCutie(denumire);
+            const bucCutieRaw     = bucatiPerCutie(denPtBuc);
             const bucCutie        = bucCutieRaw ?? 1;
             const bucCutieDetectat = bucCutieRaw !== null;
             const totalBuc  = Math.max(1, Math.round(bucCutie * cantitate));

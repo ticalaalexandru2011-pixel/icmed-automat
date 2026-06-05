@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.31
+// @version      1.32
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -746,20 +746,30 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         const inp = inputLangaLabel('Factura/Proces');
         return !!(inp && inp.value.trim());
     }
+    // Combobox-ul "Nota receptie" (cmbNotaReceptie_Display) e completat?
+    function notaPrezentaInPagina() {
+        const disp = document.querySelector('input[id*="cmbNotaReceptie_Display"], input[name*="cmbNotaReceptie$Display"]');
+        return !!(disp && disp.value.trim());
+    }
 
-    // Actualizeaza textul/culoarea butonului de antet in functie de starea (introdus sau nu)
+    // Actualizeaza butonul antet: 3 stari (lipseste factura / lipseste nota / ambele gata)
     function actualizeazaButonAntet() {
         const btn = document.getElementById('ia-btn-antet');
         if (!btn) return;
         if (!antetCurent) { btn.style.display = 'none'; return; }
         btn.style.display = 'block';
         btn.disabled = false;
-        if (antetEsteDone(antetCurent) || facturaPrezentaInPagina()) {
+        const fact = facturaPrezentaInPagina();
+        const nota = notaPrezentaInPagina();
+        if (fact && nota) {
             btn.style.background = '#2e7d32';
-            btn.textContent = '✅ Antet introdus (click = reintroduce)';
+            btn.textContent = '✅ Antet complet (factura + nota)';
+        } else if (fact) {
+            btn.style.background = '#8e24aa';
+            btn.textContent = '📋 Completeaza Nota receptie';
         } else {
             btn.style.background = '#8e24aa';
-            btn.textContent = '📋 Completeaza Factura + Nota';
+            btn.textContent = '📋 Completeaza Factura';
         }
     }
 
@@ -1670,31 +1680,32 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         document.getElementById('ia-btn-antet').addEventListener('click', async function () {
             if (!antetCurent) return;
             const btn = this;
-            // daca pare deja introdus, cerem confirmare inainte de a reintroduce
-            if ((antetEsteDone(antetCurent) || facturaPrezentaInPagina()) &&
-                !window.confirm('Antetul (Factura + Nota) pare deja introdus pentru aceasta factura. Il reintroduci?')) {
-                return;
-            }
+            const fact = facturaPrezentaInPagina();
+            const nota = notaPrezentaInPagina();
             btn.disabled = true;
-            btn.textContent = 'Se completeaza Factura…';
             try {
-                await completeazaFactura(antetCurent);
-                if (ANTET_SALVEAZA) {
-                    btn.textContent = 'Se completeaza Nota…';
-                    await sleep(500);
-                    await completeazaNota(antetCurent);
+                if (fact && nota) {
+                    // ambele deja in pagina — doar confirmam
                     marcheazaAntetDone(antetCurent);
                     btn.style.background = '#2e7d32';
-                    btn.textContent = '✅ Antet introdus — verifica, apoi treci la produse';
+                    btn.textContent = '✅ Antet complet — treci la produse';
+                } else if (fact) {
+                    // factura e salvata -> completam NOTA receptie
+                    btn.textContent = 'Se completeaza Nota…';
+                    await completeazaNota(antetCurent);
+                    btn.style.background = ANTET_SALVEAZA ? '#2e7d32' : '#ef6c00';
+                    btn.textContent = ANTET_SALVEAZA ? '✅ Nota salvata' : '🔎 Nota completata — verifica si SALVEAZA in modal';
                 } else {
-                    btn.style.background = '#ef6c00';
-                    btn.textContent = '🔎 Campuri completate (FARA save) — verifica modalul';
+                    // nimic -> completam FACTURA
+                    btn.textContent = 'Se completeaza Factura…';
+                    await completeazaFactura(antetCurent);
+                    btn.style.background = ANTET_SALVEAZA ? '#2e7d32' : '#ef6c00';
+                    btn.textContent = ANTET_SALVEAZA ? '✅ Factura salvata' : '🔎 Factura completata — verifica, SALVEAZA, apoi click din nou pt. Nota';
                 }
-                btn.disabled = false;
             } catch (err) {
                 btn.textContent = '⚠ ' + (err.message || 'eroare') + ' — incearca manual';
-                btn.disabled = false;
             }
+            btn.disabled = false;
         });
 
         document.getElementById('ia-btn-jump').addEventListener('click', () => {

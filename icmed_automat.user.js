@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.33
+// @version      1.34
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -162,13 +162,13 @@
 
     // ── Parsare antet factura (al 2-lea XML de la SAGA) ────────────────────────
 
-    // Antetul are un singur <c_xml> cu <cod_fiscal>/<nr_doc> si fara <cantitate>.
+    // Antetul = un singur <c_xml> care are <cod_fiscal> (codul fiscal al furnizorului).
+    // (Nu mai cerem absenta lui <cantitate> — unele exporturi pun un <cantitate/> gol in antet.)
     function esteAntet(xmlText) {
         const doc = new DOMParser().parseFromString(xmlText, 'text/xml');
         const items = doc.querySelectorAll('c_xml');
         if (items.length !== 1) return false;
-        const it = items[0];
-        return !!(it.querySelector('cod_fiscal') || it.querySelector('nr_doc')) && !it.querySelector('cantitate');
+        return !!(items[0].querySelector('cod_fiscal') || items[0].querySelector('nr_doc'));
     }
 
     // Prima zi a lunii din data facturii (YYYY-MM-DD) -> "01/MM/YYYY" (DD/MM/YYYY)
@@ -787,9 +787,14 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         if (!sel) return;
         if (!facturiIncarcate.length) { sel.style.display = 'none'; return; }
         sel.innerHTML = '<option value="">— alege factura —</option>' + facturiIncarcate.map((f, i) => {
-            const et = f.antet ? `${f.antet.furnizor} ${f.antet.nrDoc}` : (f.numeProduse || `factura ${i + 1}`);
-            const warn = f.antet && !f.produseText ? ' ⚠ fara produse' : '';
-            return `<option value="${i}">${esc(et)}${warn}</option>`;
+            let et;
+            if (f.antet) {
+                et = `${f.antet.furnizor} ${f.antet.nrDoc}`;
+                if (!f.produseText) et += '  ⚠ LIPSESC PRODUSELE';
+            } else {
+                et = `${f.numeProduse || ('factura ' + (i + 1))}  ⚠ LIPSESTE ANTETUL (firma)`;
+            }
+            return `<option value="${i}">${esc(et)}</option>`;
         }).join('');
         sel.style.display = 'block';
         if (selIdx != null && facturiIncarcate[selIdx]) sel.value = String(selIdx);
@@ -1642,17 +1647,29 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
                         ? cand.slice().sort((x, y) => Math.abs(timpFisier(x.name) - tA) - Math.abs(timpFisier(y.name) - tA))[0]
                         : null;
                 if (ales) ales.folosit = true;
-                facturiIncarcate.push({ antet, produseText: ales ? ales.text : null, numeProduse: ales ? ales.name : null });
+                facturiIncarcate.push({ antet, produseText: ales ? ales.text : null, numeProduse: ales ? ales.name : null, numeAntet: a.name });
             }
-            // fisiere de produse fara antet (format vechi) — le pastram si pe ele
+            // fisiere de produse fara antet (lipseste partea cu firma) — le pastram si pe ele
             for (const pf of produseF) {
-                if (!pf.folosit) facturiIncarcate.push({ antet: null, produseText: pf.text, numeProduse: pf.name });
+                if (!pf.folosit) facturiIncarcate.push({ antet: null, produseText: pf.text, numeProduse: pf.name, numeAntet: null });
             }
 
             localStorage.removeItem(KEYS.folderSel); // resetam selectia la incarcare noua
             salveazaCoada();
             rebuildDropdownFacturi(null);
-            status.textContent = `${facturiIncarcate.length} facturi gasite. Alege una din lista.`;
+
+            // avertizare: facturi incomplete (lipseste antetul SAU produsele)
+            const faraProduse = facturiIncarcate.filter(f => f.antet && !f.produseText).length;
+            const faraAntet   = facturiIncarcate.filter(f => !f.antet).length;
+            const incomplete  = faraProduse + faraAntet;
+            if (incomplete) {
+                status.innerHTML = `<b style="color:#ffcc02;">${facturiIncarcate.length} facturi — ⚠ ${incomplete} INCOMPLETE</b>`
+                    + (faraAntet ? `<br/>• ${faraAntet} fara antet (lipseste XML-ul cu firma)` : '')
+                    + (faraProduse ? `<br/>• ${faraProduse} fara produse (lipseste XML-ul cu produsele)` : '')
+                    + `<br/><span style="color:#9e9e9e;">vezi ⚠ in lista de mai sus</span>`;
+            } else {
+                status.textContent = `${facturiIncarcate.length} facturi, toate complete ✓ — alege una din lista.`;
+            }
         });
 
         function selecteazaFacturaDinCoada(i, proceseaza) {

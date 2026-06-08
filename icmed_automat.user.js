@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.36
+// @version      1.37
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -771,7 +771,7 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         const nota = notaPrezentaInPagina();
         if (fact && nota) {
             btn.style.background = '#2e7d32';
-            btn.textContent = '✅ Antet complet (factura + nota)';
+            btn.textContent = '✅ Antet complet — click = scoate din lista';
         } else if (fact) {
             btn.style.background = '#8e24aa';
             btn.textContent = '📋 Completeaza Nota receptie';
@@ -793,8 +793,12 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         return '';
     }
     function facturaTerminata(f) {
+        if (f && f.antet) {
+            const d = getAntetDone(), c = cheieAntet(f.antet);
+            if (d[c + '_med'] || d[c + '_mat']) return true; // antet marcat gata (orice pagina)
+        }
         const ch = cheieFactura(f);
-        return !!ch && getIstoric().some(x => x.cheie === ch && x.completata);
+        return !!ch && getIstoric().some(x => x.cheie === ch && x.completata); // sau produse terminate
     }
 
     function rebuildDropdownFacturi(selIdx) {
@@ -1737,10 +1741,11 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
             btn.disabled = true;
             try {
                 if (fact && nota) {
-                    // ambele deja in pagina — doar confirmam
+                    // ambele deja in pagina — marcam gata si o scoatem din lista
                     marcheazaAntetDone(antetCurent);
+                    rebuildDropdownFacturi(null);
                     btn.style.background = '#2e7d32';
-                    btn.textContent = '✅ Antet complet — treci la produse';
+                    btn.textContent = '✅ Scoasa din lista — treci la produse';
                 } else if (fact) {
                     // factura e salvata -> completam NOTA receptie
                     btn.textContent = 'Se completeaza Nota…';

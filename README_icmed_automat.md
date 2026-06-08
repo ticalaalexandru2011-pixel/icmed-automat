@@ -1,4 +1,4 @@
-# iCmed Automat - Alimentare Stoc (v1.31)
+# iCmed Automat - Alimentare Stoc (v1.37)
 
 Script Tampermonkey care completeaza automat formularul "Alimentare stoc medicamente" / "Alimentare stoc materiale"
 din iCmed, pe baza unui fisier XML exportat din SAGA.
@@ -7,15 +7,21 @@ din iCmed, pe baza unui fisier XML exportat din SAGA.
 
 ## ⏳ STATUS CURENT — unde am ramas (de continuat)
 
-**Functioneaza (completare antet Factura, v1.31):** modalul Factura e un IFRAME (`ModalDialogBoxImpl_iframe`) — completarea lucreaza in `iframe.contentDocument`. Se completeaza: Furnizor (dupa CUI), Cota TVA (dropdown, =0), Valoare fara tva, Valoare tva, Serie, Numar, Data (prima zi a lunii). Completare PE RAND, cu pauza ~800ms dupa fiecare camp (iCmed face un mic refresh/postback dupa fiecare; daca pui rapid, refresh-ul sterge campul urmator).
+**Format real SAGA (descoperit v1.36):** exportul NU e "1 antet + 1 produse". Fisierul de antet e **lista TUTUROR facturilor primite** (zeci de `<c_xml>` cu `<cod_fiscal>`, aceeasi lista in fiecare export). Fisierele de produse sunt cate o factura (linii cu `<cantitate>`/`<den_ef>`). Scriptul: strange toate anteturile din fisierele-lista intr-un pool (deduplicate dupa CUI+nrDoc+total), apoi imperecheaza fiecare fisier de produse cu antetul din pool care are **acelasi total** (sau aceeasi baza fara TVA). In dropdown apar doar facturile cu produse, etichetate cu numele firmei; daca un fisier de produse n-are antet potrivit → "⚠ fara antet potrivit".
 
-**In lucru — "Valoare totala":** campul e special — nu se ajunge la el cu Tab, trebuie CLICK ca sa devina editabil, si accepta doar taste reale (nu `.value` direct). v1.31: dupa toate campurile, click pe totala + tastare caracter cu caracter a valorii citite din "Valoare fara tva" (ca sa fie identice — iCmed verifica la salvare ca totala bate cu suma produselor). DE CONFIRMAT ca scrie acum.
+**Dropdown (v1.34-1.37):** arata numele firmei pt. fiecare factura; avertizare daca lipseste un XML. Facturile **terminate dispar din dropdown** (raman in Istoric) — o factura e "terminata" daca antetul e marcat gata (buton "✅ Antet complet — click = scoate din lista") SAU produsele sunt terminate (`completata` in istoric / "Marcheaza gata").
 
-**De facut dupa ce totala merge:** completeazaNota (Numar = afisat+1, Data) e gata in cod dar netestata; apoi `ANTET_SALVEAZA = true` (acum `false` = completeaza fara sa salveze, ca sa verifici).
+**Buc/cutie (v1.33):** "100 BUC"/"25 BUCATI" recunoscute; "COMPONENTE" nu mai e confundat cu "COMP" (comprimate). Foloseste si `den_ef` (nume complet) la detectie.
 
-**Insight-uri cheie iCmed:** id-uri campuri in iframe (prefix `ctl11_`): `cmbFurnizor`, `txtValoareFaraTVA`, `txtValoareTVA`, `txtValoareTotala`, `txtSeriaFacturii`, `txtNrFactura`, `txtDataFactura_ctl00`. Cota TVA = camp separat langa eticheta "TVA:" (dropdown 0/5/9/11/19/20/21/24). Butoane in pagina principala: `btnAddFactura` (➕ Factura), `btnNotaRec` (➕ Nota). Valori cu virgula. Testare pe clinic.icmed.ro = date REALE.
+**Completare antet Factura (functioneaza):** modalul e un IFRAME (`ModalDialogBoxImpl_iframe`) — se lucreaza in `iframe.contentDocument`. Completare PE RAND, cu pauza ~800ms dupa fiecare camp (iCmed face un mic refresh dupa fiecare): Furnizor (dupa CUI) → Cota TVA (dropdown, =0) → Valoare fara tva → Valoare tva → Serie → Numar → Data (prima zi a lunii). "Valoare totala" = camp special: trebuie CLICK ca sa devina editabil + tastare caracter cu caracter (`.value` direct e ignorat); ia valoarea din "Valoare fara tva".
 
-**Canal de debug:** butonul 🐞 Debug copiaza raportul in clipboard SI il poate trimite la un URL webhook.site (vezi sectiunea Debug). Debug-ul dumpeaza si campurile din iframe + zona valori/TVA (ocoleste viewstate-ul urias).
+**Buton antet pas-cu-pas:** factura lipseste → "Completeaza Factura"; factura prezenta, nota lipseste → "Completeaza Nota receptie"; ambele → "✅ Antet complet — click = scoate din lista".
+
+**De facut:** confirmare completeazaNota pe pagina reala; apoi `ANTET_SALVEAZA = true` (acum `false` = completeaza fara sa salveze, ca userul sa verifice).
+
+**Insight-uri cheie iCmed:** id-uri campuri in iframe (prefix `ctl11_`): `cmbFurnizor`, `txtValoareFaraTVA`, `txtValoareTVA`, `txtValoareTotala`, `txtSeriaFacturii`, `txtNrFactura`, `txtDataFactura_ctl00`. Cota TVA = camp separat langa eticheta exact "TVA:" (dropdown 0/5/9/11/19/20/21/24). Butoane in pagina principala: `btnAddFactura` (➕ Factura), `btnNotaRec` (➕ Nota), `cmbFactura_Display`/`cmbNotaReceptie_Display` (= detectie antet prezent). Valori cu virgula. Testare pe clinic.icmed.ro = date REALE.
+
+**Canal de debug:** butonul 🐞 Debug copiaza raportul in clipboard SI il poate trimite la un URL webhook.site. Dumpeaza campurile din iframe + zona valori/TVA (ocoleste viewstate-ul urias).
 
 ---
 

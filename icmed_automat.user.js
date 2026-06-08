@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.34
+// @version      1.35
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -782,11 +782,23 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         try { localStorage.setItem(KEYS.folderQueue, JSON.stringify(facturiIncarcate)); }
         catch (e) { try { localStorage.removeItem(KEYS.folderQueue); } catch (e2) {} }
     }
+    // O factura din coada e "terminata" daca exista in istoric cu completata=true.
+    function cheieFactura(f) {
+        if (f && f.antet) return (f.antet.serie + f.antet.numar) || f.antet.nrDoc || '';
+        if (f && f.numeProduse) return parseazaNumeFisier(f.numeProduse).cheie;
+        return '';
+    }
+    function facturaTerminata(f) {
+        const ch = cheieFactura(f);
+        return !!ch && getIstoric().some(x => x.cheie === ch && x.completata);
+    }
+
     function rebuildDropdownFacturi(selIdx) {
         const sel = document.getElementById('ia-factura-select');
         if (!sel) return;
         if (!facturiIncarcate.length) { sel.style.display = 'none'; return; }
-        sel.innerHTML = '<option value="">— alege factura —</option>' + facturiIncarcate.map((f, i) => {
+        const optiuni = facturiIncarcate.map((f, i) => {
+            if (facturaTerminata(f)) return ''; // terminata -> doar in Istoric, nu in dropdown
             let et;
             if (f.antet) {
                 et = `${f.antet.furnizor} ${f.antet.nrDoc}`;
@@ -796,8 +808,9 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
             }
             return `<option value="${i}">${esc(et)}</option>`;
         }).join('');
+        sel.innerHTML = '<option value="">— alege factura —</option>' + optiuni;
         sel.style.display = 'block';
-        if (selIdx != null && facturiIncarcate[selIdx]) sel.value = String(selIdx);
+        if (selIdx != null && facturiIncarcate[selIdx] && !facturaTerminata(facturiIncarcate[selIdx])) sel.value = String(selIdx);
     }
 
     // ── Debug: auto-test selectori + HTML, copiat in clipboard ────────────────
@@ -1011,6 +1024,7 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         }
         saveIstoric(istoric);
         afiseazaIstoric();
+        rebuildDropdownFacturi(null); // scoatem factura terminata din dropdown
     }
 
     function afiseazaIstoric() {
@@ -1498,6 +1512,7 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
                 factura.completataLa = new Date().toISOString();
                 saveIstoric(istoric);
                 afiseazaIstoric();
+                rebuildDropdownFacturi(null); // scoatem factura terminata din dropdown
                 return;
             }
             const btnSterge = e.target.closest('[data-sterge]');

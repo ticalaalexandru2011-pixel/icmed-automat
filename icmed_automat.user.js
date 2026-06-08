@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.35
+// @version      1.36
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -179,8 +179,12 @@
     }
 
     function parseazaAntet(xmlText) {
-        const doc = new DOMParser().parseFromString(xmlText, 'text/xml');
-        const it = doc.querySelector('c_xml');
+        const it = new DOMParser().parseFromString(xmlText, 'text/xml').querySelector('c_xml');
+        return parseazaAntetEl(it);
+    }
+
+    // Parseaza UN element <c_xml> de antet (fisierul-lista de la SAGA are multe anteturi).
+    function parseazaAntetEl(it) {
         const g = tag => (it?.querySelector(tag)?.textContent || '').trim();
         const nrDoc = g('nr_doc');
         // "MED2 85291" -> serie "MED2", numar "85291"; fallback litere+cifre
@@ -1646,44 +1650,56 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
             const parsed = [];
             for (const f of files) parsed.push({ name: f.name, text: await citesteFisier(f) });
 
-            const anteturi = [], produseF = [];
+            // Clasificare: fisier-LISTA de anteturi (c_xml au <cod_fiscal>) vs fisier de PRODUSE
+            // (c_xml au <cantitate>). Fisierul-lista de la SAGA contine TOATE facturile primite
+            // (~zeci de anteturi, aceeasi lista in fiecare export); produsele sunt cate un fisier/factura.
+            const poolAntet = [];          // toate anteturile (deduplicate)
+            const seenAntet = new Set();
+            const produseF  = [];          // fisierele de produse (cate o factura fiecare)
             for (const p of parsed) {
-                if (esteAntet(p.text)) anteturi.push(p);
-                else produseF.push({ ...p, suma: sumaLinii(p.text), folosit: false });
+                const items = [...new DOMParser().parseFromString(p.text, 'text/xml').querySelectorAll('c_xml')];
+                if (!items.length) continue;
+                const areCantitate = items.some(it => it.querySelector('cantitate'));
+                const areCodFiscal = items.some(it => it.querySelector('cod_fiscal'));
+                if (areCantitate && !areCodFiscal) {
+                    produseF.push({ name: p.name, text: p.text, suma: sumaLinii(p.text) });
+                } else if (areCodFiscal) {
+                    items.forEach(it => {
+                        if (!it.querySelector('cod_fiscal')) return;
+                        const a = parseazaAntetEl(it);
+                        const k = (a.cui || '') + '|' + (a.nrDoc || '') + '|' + a.totalStr;
+                        if (!seenAntet.has(k)) { seenAntet.add(k); poolAntet.push(a); }
+                    });
+                }
             }
 
+            // Fiecare fisier de PRODUSE -> antetul din pool cu acelasi total (sau aceeasi baza fara TVA).
+            const num = v => parseFloat(String(v).replace(',', '.')) || 0;
+            const folositAntet = new Set();
             facturiIncarcate = [];
-            for (const a of anteturi) {
-                const antet = parseazaAntet(a.text);
-                const tA = timpFisier(a.name);
-                const cand = produseF.filter(pf => !pf.folosit && Math.abs(pf.suma - antet.total) < 0.02);
-                let ales = cand.length === 1 ? cand[0]
-                    : cand.length > 1
-                        ? cand.slice().sort((x, y) => Math.abs(timpFisier(x.name) - tA) - Math.abs(timpFisier(y.name) - tA))[0]
-                        : null;
-                if (ales) ales.folosit = true;
-                facturiIncarcate.push({ antet, produseText: ales ? ales.text : null, numeProduse: ales ? ales.name : null, numeAntet: a.name });
-            }
-            // fisiere de produse fara antet (lipseste partea cu firma) — le pastram si pe ele
             for (const pf of produseF) {
-                if (!pf.folosit) facturiIncarcate.push({ antet: null, produseText: pf.text, numeProduse: pf.name, numeAntet: null });
+                const antet = poolAntet.find(a => {
+                    const k = (a.cui || '') + '|' + (a.nrDoc || '') + '|' + a.totalStr;
+                    if (folositAntet.has(k)) return false;
+                    return Math.abs(a.total - pf.suma) < 0.02 || Math.abs(num(a.bazaTva) - pf.suma) < 0.02;
+                }) || null;
+                if (antet) folositAntet.add((antet.cui || '') + '|' + (antet.nrDoc || '') + '|' + antet.totalStr);
+                facturiIncarcate.push({ antet, produseText: pf.text, numeProduse: pf.name, numeAntet: null });
             }
 
             localStorage.removeItem(KEYS.folderSel); // resetam selectia la incarcare noua
             salveazaCoada();
             rebuildDropdownFacturi(null);
 
-            // avertizare: facturi incomplete (lipseste antetul SAU produsele)
-            const faraProduse = facturiIncarcate.filter(f => f.antet && !f.produseText).length;
-            const faraAntet   = facturiIncarcate.filter(f => !f.antet).length;
-            const incomplete  = faraProduse + faraAntet;
-            if (incomplete) {
-                status.innerHTML = `<b style="color:#ffcc02;">${facturiIncarcate.length} facturi — ⚠ ${incomplete} INCOMPLETE</b>`
-                    + (faraAntet ? `<br/>• ${faraAntet} fara antet (lipseste XML-ul cu firma)` : '')
-                    + (faraProduse ? `<br/>• ${faraProduse} fara produse (lipseste XML-ul cu produsele)` : '')
-                    + `<br/><span style="color:#9e9e9e;">vezi ⚠ in lista de mai sus</span>`;
+            // avertizare: fisiere de produse fara antet potrivit in lista (total negasit)
+            const faraAntet = facturiIncarcate.filter(f => !f.antet).length;
+            if (!facturiIncarcate.length) {
+                status.innerHTML = `<b style="color:#ffcc02;">Niciun fisier de produse gasit.</b><br/><span style="color:#9e9e9e;">Incarca si fisierul cu produsele (cel cu cantitati), nu doar lista de facturi.</span>`;
+            } else if (faraAntet) {
+                status.innerHTML = `<b style="color:#ffcc02;">${facturiIncarcate.length} facturi — ⚠ ${faraAntet} fara antet potrivit</b>`
+                    + `<br/><span style="color:#9e9e9e;">(nu s-a gasit in lista o factura cu acelasi total — vezi ⚠ in lista)</span>`;
             } else {
-                status.textContent = `${facturiIncarcate.length} facturi, toate complete ✓ — alege una din lista.`;
+                status.textContent = `${facturiIncarcate.length} facturi, toate cu antet ✓ — alege una din lista.`;
             }
         });
 

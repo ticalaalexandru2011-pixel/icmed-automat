@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.41
+// @version      1.42
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -808,9 +808,19 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
     function rebuildDropdownFacturi(selIdx) {
         const sel = document.getElementById('ia-factura-select');
         if (!sel) return;
-        if (!facturiIncarcate.length) { sel.style.display = 'none'; return; }
+        const wrap = document.getElementById('ia-arata-terminate-wrap');
+        const chk  = document.getElementById('ia-arata-terminate');
+        if (!facturiIncarcate.length) {
+            sel.style.display = 'none';
+            if (wrap) wrap.style.display = 'none';
+            return;
+        }
+        const arataTerminate = !!(chk && chk.checked);
+        let nrTerminate = 0;
         const optiuni = facturiIncarcate.map((f, i) => {
-            if (facturaTerminata(f)) return ''; // terminata -> doar in Istoric, nu in dropdown
+            const terminata = facturaTerminata(f);
+            if (terminata) nrTerminate++;
+            if (terminata && !arataTerminate) return ''; // terminata -> ascunsa (daca nu e bifat "arata")
             let et;
             if (f.antet) {
                 et = `${f.antet.furnizor} ${f.antet.nrDoc}`;
@@ -819,11 +829,14 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
                 const tot = f.produseText ? sumaLinii(f.produseText).toFixed(2).replace('.', ',') : '?';
                 et = `${f.numeProduse || ('factura ' + (i + 1))}  ⚠ FARA ANTET (total ${tot})`;
             }
+            if (terminata) et = '✅ ' + et + ' (terminata)';
             return `<option value="${i}">${esc(et)}</option>`;
         }).join('');
         sel.innerHTML = '<option value="">— alege factura —</option>' + optiuni;
         sel.style.display = 'block';
-        if (selIdx != null && facturiIncarcate[selIdx] && !facturaTerminata(facturiIncarcate[selIdx])) sel.value = String(selIdx);
+        // arata checkbox-ul doar daca exista facturi terminate (ca sa le poti aduce inapoi)
+        if (wrap) wrap.style.display = nrTerminate ? 'flex' : 'none';
+        if (selIdx != null && facturiIncarcate[selIdx]) sel.value = String(selIdx);
     }
 
     // ── Debug: auto-test selectori + HTML, copiat in clipboard ────────────────
@@ -1247,6 +1260,9 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
             <input id="ia-file" type="file" accept=".xml" style="width:100%;font-size:12px;margin-bottom:8px;"/>
             <label style="display:block;margin-bottom:4px;font-size:12px;color:#c8e6c9;">…sau incarca un folder intreg de XML-uri:</label>
             <input id="ia-folder" type="file" webkitdirectory directory multiple style="width:100%;font-size:11px;margin-bottom:6px;"/>
+            <label id="ia-arata-terminate-wrap" style="display:none;align-items:center;gap:5px;font-size:11px;color:#c8e6c9;margin-bottom:4px;cursor:pointer;">
+                <input id="ia-arata-terminate" type="checkbox" style="cursor:pointer;"/> arata si facturile terminate
+            </label>
             <select id="ia-factura-select" style="display:none;width:100%;font-size:12px;padding:4px;margin-bottom:6px;border-radius:4px;border:none;"></select>
             <button id="ia-btn-antet" style="display:none;width:100%;padding:8px;background:#8e24aa;border:none;border-radius:5px;color:#fff;font-weight:bold;cursor:pointer;font-size:12px;margin-bottom:8px;">📋 Completeaza Factura + Nota</button>
             <div id="ia-status" style="color:#c8e6c9;font-size:12px;margin-bottom:8px;"></div>
@@ -1801,6 +1817,9 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
             if (!Number.isInteger(i)) { antetCurent = null; actualizeazaButonAntet(); return; }
             selecteazaFacturaDinCoada(i, true);
         });
+
+        const chkTerm = document.getElementById('ia-arata-terminate');
+        if (chkTerm) chkTerm.addEventListener('change', () => rebuildDropdownFacturi(null));
 
         document.getElementById('ia-btn-antet').addEventListener('click', async function () {
             if (!antetCurent) return;

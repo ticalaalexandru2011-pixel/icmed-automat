@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.43
+// @version      1.44
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx*
@@ -717,13 +717,7 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         if (!doc) throw new Error('modalul Nota (iframe) nu s-a deschis');
         await sleep(500);
 
-        const numarInp = campInPopup(doc, 'Numar');
-        if (numarInp) {
-            const afisat = parseInt((numarInp.value || '').replace(/\D/g, ''), 10) || 0;
-            const nrNou = Math.max(afisat + 1, ultimNotaNr + 1);
-            ultimNotaNr = nrNou;
-            seteazaValoare(numarInp, String(nrNou));
-        }
+        // Numarul notei: NU il modificam — iCmed pune deja automat urmatorul numar (+1).
         const dataInp = campInPopup(doc, 'Data');
         if (dataInp && antet.dataICmed) seteazaValoare(dataInp, antet.dataICmed);
 

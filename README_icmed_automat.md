@@ -1,4 +1,4 @@
-# iCmed Automat - Alimentare Stoc (v1.37)
+# iCmed Automat - Alimentare Stoc (v1.44)
 
 Script Tampermonkey care completeaza automat formularul "Alimentare stoc medicamente" / "Alimentare stoc materiale"
 din iCmed, pe baza unui fisier XML exportat din SAGA.
@@ -15,9 +15,11 @@ din iCmed, pe baza unui fisier XML exportat din SAGA.
 
 **Completare antet Factura (functioneaza):** modalul e un IFRAME (`ModalDialogBoxImpl_iframe`) — se lucreaza in `iframe.contentDocument`. Completare PE RAND, cu pauza ~800ms dupa fiecare camp (iCmed face un mic refresh dupa fiecare): Furnizor (dupa CUI) → Cota TVA (dropdown, =0) → Valoare fara tva → Valoare tva → Serie → Numar → Data (prima zi a lunii). "Valoare totala" = camp special: trebuie CLICK ca sa devina editabil + tastare caracter cu caracter (`.value` direct e ignorat); ia valoarea din "Valoare fara tva".
 
-**Buton antet pas-cu-pas:** factura lipseste → "Completeaza Factura"; factura prezenta, nota lipseste → "Completeaza Nota receptie"; ambele → "✅ Antet complet — click = scoate din lista".
+**Buton antet pas-cu-pas + Salveaza (v1.39):** factura lipseste → "Completeaza Factura" → completeaza → "💾 Salveaza factura — verifica, apoi click" → click salveaza (modalul) → pagina se reincarca → "Completeaza Nota receptie" → "💾 Salveaza nota" → "✅ Antet complet — click = scoate din lista". Cand modalul (factura/nota) e deschis, butonul devine SALVEAZA (apasa Salveaza din modal). Nota: numarul notei NU se mai modifica — iCmed pune automat +1 (v1.44).
 
-**De facut:** confirmare completeazaNota pe pagina reala; apoi `ANTET_SALVEAZA = true` (acum `false` = completeaza fara sa salveze, ca userul sa verifice).
+**Panoul reapare dupa Salveaza (v1.39+1.43):** dupa Salveaza, iCmed schimba URL-ul in `...module.aspx?scrollX=...&_POSTBACKPARAMETERS_=...`. CHEIE: `@match` trebuie sa se termine in `*` (altfel Tampermonkey nu mai incarca scriptul pe URL-ul cu query → panoul dispare). Plus watcher `setInterval` 1.5s care reinjecteaza panoul daca dispare (init pazit contra dublarii). Panoul are `max-height:calc(100vh-20px)` + scroll intern ca sa nu iasa din ecran.
+
+**Dropdown facturi (v1.41-1.42):** facturile fara antet potrivit raman VIZIBILE cu "⚠ FARA ANTET (total X)" (nu se mai ascund). Facturile terminate dispar, dar checkbox-ul "arata si facturile terminate" le aduce inapoi (selectabile, marcate "✅ ... (terminata)"). Istoric fara duplicate: `dedupeIstoric()` grupeaza dupa serie+numar/cheie, contopeste progresul, pastreaza numele firmei (non-XML); ruleaza la afisare si dupa migrare.
 
 **Insight-uri cheie iCmed:** id-uri campuri in iframe (prefix `ctl11_`): `cmbFurnizor`, `txtValoareFaraTVA`, `txtValoareTVA`, `txtValoareTotala`, `txtSeriaFacturii`, `txtNrFactura`, `txtDataFactura_ctl00`. Cota TVA = camp separat langa eticheta exact "TVA:" (dropdown 0/5/9/11/19/20/21/24). Butoane in pagina principala: `btnAddFactura` (➕ Factura), `btnNotaRec` (➕ Nota), `cmbFactura_Display`/`cmbNotaReceptie_Display` (= detectie antet prezent). Valori cu virgula. Testare pe clinic.icmed.ro = date REALE.
 

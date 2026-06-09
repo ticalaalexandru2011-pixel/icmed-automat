@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.40
+// @version      1.41
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -799,12 +799,10 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         return '';
     }
     function facturaTerminata(f) {
-        if (f && f.antet) {
-            const d = getAntetDone(), c = cheieAntet(f.antet);
-            if (d[c + '_med'] || d[c + '_mat']) return true; // antet marcat gata (orice pagina)
-        }
-        const ch = cheieFactura(f);
-        return !!ch && getIstoric().some(x => x.cheie === ch && x.completata); // sau produse terminate
+        if (!f || !f.antet) return false; // fara antet potrivit -> ramane VIZIBILA (cu avertizare)
+        const d = getAntetDone(), c = cheieAntet(f.antet);
+        if (d[c + '_med'] || d[c + '_mat']) return true;                 // antet marcat gata (orice pagina)
+        return getIstoric().some(x => x.cheie === c && x.completata);    // sau produse terminate
     }
 
     function rebuildDropdownFacturi(selIdx) {
@@ -818,7 +816,8 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
                 et = `${f.antet.furnizor} ${f.antet.nrDoc}`;
                 if (!f.produseText) et += '  ⚠ LIPSESC PRODUSELE';
             } else {
-                et = `${f.numeProduse || ('factura ' + (i + 1))}  ⚠ LIPSESTE ANTETUL (firma)`;
+                const tot = f.produseText ? sumaLinii(f.produseText).toFixed(2).replace('.', ',') : '?';
+                et = `${f.numeProduse || ('factura ' + (i + 1))}  ⚠ FARA ANTET (total ${tot})`;
             }
             return `<option value="${i}">${esc(et)}</option>`;
         }).join('');
@@ -1041,6 +1040,31 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
             target.firma = f.antet.furnizor; target.serie = f.antet.serie; target.nr = f.antet.numar;
         }
         if (schimbat) saveIstoric(istoric);
+        dedupeIstoric();
+    }
+
+    // Elimina duplicatele din istoric: grupeaza dupa serie+numar (daca exista) sau dupa cheie,
+    // contopind progresul (max) si pastrand numele firmei (non-"XML-...").
+    function dedupeIstoric() {
+        const istoric = getIstoric();
+        const byKey = new Map();
+        let schimbat = false;
+        for (const f of istoric) {
+            const gk = (f.serie || f.nr) ? `${(f.serie || '').toUpperCase()}|${f.nr || ''}` : (f.cheie || '');
+            const t = byKey.get(gk);
+            if (!t) { byKey.set(gk, f); continue; }
+            t.procesatMed   = Math.max(t.procesatMed || 0, f.procesatMed || 0);
+            t.procesatMat   = Math.max(t.procesatMat || 0, f.procesatMat || 0);
+            t.totalMed      = Math.max(t.totalMed || 0, f.totalMed || 0);
+            t.totalMat      = Math.max(t.totalMat || 0, f.totalMat || 0);
+            t.completataMed = t.completataMed || f.completataMed;
+            t.completataMat = t.completataMat || f.completataMat;
+            t.completata    = t.completata || f.completata;
+            const tXml = /^XML[- ]/i.test(t.firma || '') || !t.firma;
+            if (tXml && f.firma && !/^XML[- ]/i.test(f.firma)) { t.firma = f.firma; t.serie = f.serie; t.nr = f.nr; t.cheie = f.cheie; }
+            schimbat = true;
+        }
+        if (schimbat) saveIstoric([...byKey.values()]);
     }
 
     function marcheazaAvans() {
@@ -1077,6 +1101,7 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
     function afiseazaIstoric() {
         const el = document.getElementById('ia-istoric-lista');
         if (!el) return;
+        dedupeIstoric();                 // fara duplicate
         const istoric = getIstoric();
         const foldere = getFoldere();
 

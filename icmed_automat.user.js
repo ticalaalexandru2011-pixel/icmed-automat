@@ -1,13 +1,13 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.42
+// @version      1.43
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
-// @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
-// @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMateriale.module.aspx
-// @match        https://*.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
-// @match        https://*.icmed.ro/Main/Configurare/Intrari/AlimentareStocMateriale.module.aspx
+// @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx*
+// @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMateriale.module.aspx*
+// @match        https://*.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx*
+// @match        https://*.icmed.ro/Main/Configurare/Intrari/AlimentareStocMateriale.module.aspx*
 // @homepageURL  https://github.com/ticalaalexandru2011-pixel/icmed-automat
 // @supportURL   https://github.com/ticalaalexandru2011-pixel/icmed-automat/issues
 // @updateURL    https://raw.githubusercontent.com/ticalaalexandru2011-pixel/icmed-automat/main/icmed_automat.user.js

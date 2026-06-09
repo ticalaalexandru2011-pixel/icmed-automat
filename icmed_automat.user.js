@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.39
+// @version      1.40
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -1201,10 +1201,11 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         div.id = 'icmed-panel';
         div.style.cssText = `
             position:fixed; top:10px; right:10px; width:300px;
+            max-height:calc(100vh - 20px); overflow-y:auto;
             background:#3d5a2a; color:#fff; border-radius:8px;
             padding:14px; z-index:999999; font-family:Arial,sans-serif;
             font-size:13px; box-shadow:0 4px 16px rgba(0,0,0,.5);
-            user-select:none;
+            user-select:none; scrollbar-width:thin; scrollbar-color:#6a8a4a #2d4a1a;
         `;
         div.innerHTML = `
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;border-bottom:1px solid #6a8a4a;padding-bottom:6px;">

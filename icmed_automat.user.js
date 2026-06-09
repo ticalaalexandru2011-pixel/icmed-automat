@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.38
+// @version      1.39
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -767,6 +767,12 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         if (!antetCurent) { btn.style.display = 'none'; return; }
         btn.style.display = 'block';
         btn.disabled = false;
+        // daca modalul (factura/nota) e deschis si completat -> butonul SALVEAZA
+        if (gasesteModalDoc()) {
+            btn.style.background = '#ef6c00';
+            btn.textContent = '💾 Salveaza — verifica datele, apoi click';
+            return;
+        }
         const fact = facturaPrezentaInPagina();
         const nota = notaPrezentaInPagina();
         if (fact && nota) {
@@ -1497,6 +1503,7 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
     // ── init ──────────────────────────────────────────────────────────────────
 
     function init() {
+        if (document.getElementById('icmed-panel')) return; // deja injectat (evitam dublarea)
         creeazaPanel();
         afiseazaIstoric();
 
@@ -1772,10 +1779,20 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         document.getElementById('ia-btn-antet').addEventListener('click', async function () {
             if (!antetCurent) return;
             const btn = this;
-            const fact = facturaPrezentaInPagina();
-            const nota = notaPrezentaInPagina();
             btn.disabled = true;
             try {
+                const modalDoc = gasesteModalDoc();
+                if (modalDoc) {
+                    // modalul (factura SAU nota) e completat -> SALVAM (iCmed reincarca pagina dupa)
+                    btn.textContent = 'Se salveaza…';
+                    await salveazaModal(modalDoc);
+                    btn.style.background = '#2e7d32';
+                    btn.textContent = '✅ Salvat';
+                    actualizeazaButonAntet();
+                    return;
+                }
+                const fact = facturaPrezentaInPagina();
+                const nota = notaPrezentaInPagina();
                 if (fact && nota) {
                     // ambele deja in pagina — marcam gata si o scoatem din lista
                     marcheazaAntetDone(antetCurent);
@@ -1783,17 +1800,17 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
                     btn.style.background = '#2e7d32';
                     btn.textContent = '✅ Scoasa din lista — treci la produse';
                 } else if (fact) {
-                    // factura e salvata -> completam NOTA receptie
+                    // factura e salvata -> completam NOTA receptie (modalul ramane deschis pt. Salveaza)
                     btn.textContent = 'Se completeaza Nota…';
                     await completeazaNota(antetCurent);
-                    btn.style.background = ANTET_SALVEAZA ? '#2e7d32' : '#ef6c00';
-                    btn.textContent = ANTET_SALVEAZA ? '✅ Nota salvata' : '🔎 Nota completata — verifica si SALVEAZA in modal';
+                    btn.style.background = '#ef6c00';
+                    btn.textContent = '💾 Salveaza nota — verifica, apoi click';
                 } else {
-                    // nimic -> completam FACTURA
+                    // nimic -> completam FACTURA (modalul ramane deschis pt. Salveaza)
                     btn.textContent = 'Se completeaza Factura…';
                     await completeazaFactura(antetCurent);
-                    btn.style.background = ANTET_SALVEAZA ? '#2e7d32' : '#ef6c00';
-                    btn.textContent = ANTET_SALVEAZA ? '✅ Factura salvata' : '🔎 Factura completata — verifica, SALVEAZA, apoi click din nou pt. Nota';
+                    btn.style.background = '#ef6c00';
+                    btn.textContent = '💾 Salveaza factura — verifica, apoi click';
                 }
             } catch (err) {
                 btn.textContent = '⚠ ' + (err.message || 'eroare') + ' — incearca manual';
@@ -1897,5 +1914,7 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
     } else {
         init();
     }
+    // Dupa Salveaza, iCmed reincarca pagina (postback) si panoul dispare — il reinjectam.
+    setInterval(() => { if (!document.getElementById('icmed-panel')) init(); }, 1500);
 
 })();

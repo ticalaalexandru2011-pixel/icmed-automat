@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.37
+// @version      1.38
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx
@@ -1004,6 +1004,39 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         return factura;
     }
 
+    // Relabeleaza intrarile vechi din istoric (numite "XML-806-..." de dinainte de imperechere)
+    // dupa antetul potrivit (gasit dupa numele fisierului de produse) si le contopeste cu intrarea
+    // corecta, pastrand progresul. Ruleaza dupa ce facturiIncarcate e construit/restaurat.
+    function migreazaIstoricDupaFolder() {
+        if (!Array.isArray(facturiIncarcate) || !facturiIncarcate.length) return;
+        const istoric = getIstoric();
+        let schimbat = false;
+        for (const f of facturiIncarcate) {
+            if (!f.antet || !f.numeProduse) continue;
+            const fileBase = f.numeProduse.replace(/\.xml$/i, '').trim();
+            const newCheie = (f.antet.serie + f.antet.numar) || f.antet.nrDoc;
+            const stale = istoric.filter(x => (x.cheie === fileBase || x.filename === fileBase) && x.cheie !== newCheie);
+            if (!stale.length) continue;
+            let target = istoric.find(x => x.cheie === newCheie);
+            for (const s of stale) {
+                if (!target) { s.cheie = newCheie; target = s; }
+                else {
+                    target.procesatMed   = Math.max(target.procesatMed || 0, s.procesatMed || 0);
+                    target.procesatMat   = Math.max(target.procesatMat || 0, s.procesatMat || 0);
+                    target.totalMed      = Math.max(target.totalMed || 0, s.totalMed || 0);
+                    target.totalMat      = Math.max(target.totalMat || 0, s.totalMat || 0);
+                    target.completataMed = target.completataMed || s.completataMed;
+                    target.completataMat = target.completataMat || s.completataMat;
+                    target.completata    = target.completata || s.completata;
+                    const idx = istoric.indexOf(s); if (idx >= 0) istoric.splice(idx, 1);
+                }
+                schimbat = true;
+            }
+            target.firma = f.antet.furnizor; target.serie = f.antet.serie; target.nr = f.antet.numar;
+        }
+        if (schimbat) saveIstoric(istoric);
+    }
+
     function marcheazaAvans() {
         const fc = getFacturaCurenta();
         if (!fc) return;
@@ -1499,6 +1532,7 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
             const q = JSON.parse(localStorage.getItem(KEYS.folderQueue) || 'null');
             if (Array.isArray(q) && q.length) {
                 facturiIncarcate = q;
+                migreazaIstoricDupaFolder(); // relabeleaza intrarile vechi "XML-..." din istoric
                 const selStr = localStorage.getItem(KEYS.folderSel);
                 const selIdx = selStr !== null ? parseInt(selStr, 10) : null;
                 rebuildDropdownFacturi(selIdx);
@@ -1692,6 +1726,8 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
             }
 
             localStorage.removeItem(KEYS.folderSel); // resetam selectia la incarcare noua
+            migreazaIstoricDupaFolder();             // relabeleaza intrarile vechi "XML-..." din istoric
+            afiseazaIstoric();
             salveazaCoada();
             rebuildDropdownFacturi(null);
 

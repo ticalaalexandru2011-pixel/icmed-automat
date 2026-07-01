@@ -1,4 +1,4 @@
-# iCmed Automat - Alimentare Stoc (v1.44)
+# iCmed Automat - Alimentare Stoc (v1.49)
 
 Script Tampermonkey care completeaza automat formularul "Alimentare stoc medicamente" / "Alimentare stoc materiale"
 din iCmed, pe baza unui fisier XML exportat din SAGA.
@@ -20,6 +20,16 @@ din iCmed, pe baza unui fisier XML exportat din SAGA.
 **Panoul reapare dupa Salveaza (v1.39+1.43):** dupa Salveaza, iCmed schimba URL-ul in `...module.aspx?scrollX=...&_POSTBACKPARAMETERS_=...`. CHEIE: `@match` trebuie sa se termine in `*` (altfel Tampermonkey nu mai incarca scriptul pe URL-ul cu query → panoul dispare). Plus watcher `setInterval` 1.5s care reinjecteaza panoul daca dispare (init pazit contra dublarii). Panoul are `max-height:calc(100vh-20px)` + scroll intern ca sa nu iasa din ecran.
 
 **Dropdown facturi (v1.41-1.42):** facturile fara antet potrivit raman VIZIBILE cu "⚠ FARA ANTET (total X)" (nu se mai ascund). Facturile terminate dispar, dar checkbox-ul "arata si facturile terminate" le aduce inapoi (selectabile, marcate "✅ ... (terminata)"). Istoric fara duplicate: `dedupeIstoric()` grupeaza dupa serie+numar/cheie, contopeste progresul, pastreaza numele firmei (non-XML); ruleaza la afisare si dupa migrare.
+
+**Auto-detectie stare (v1.45):** watcher-ul (1.5s) reapeleaza `actualizeazaButonAntet()` — butonul isi da seama singur ca factura/nota sunt introduse, chiar daca ai salvat MANUAL (nu din butonul scriptului), fiindca iCmed populeaza campurile via postback async dupa init.
+
+**"Antet complet" curata pagina (v1.47):** la click, pe langa marcare gata + scoatere din lista, apasa X (btnErase) la comboboxurile Factura si Nota receptie -> incepi factura urmatoare din prima, fara sa dai tu pe X. ATENTIE bug reparat (v1.49): `PAGINA` e `'materiale'` (nu `'mat'`); `facturaTerminata` verifica `_med || _materiale` (nu `_mat`), altfel facturile de materiale nu se scoteau din lista.
+
+**Verificare alimentare (v1.46):** citeste din panoul iCmed "Detalii factura selectata" (Nr pozitii, Med, Mat, Val total alimentata, Val factura) si compara pe TOTAL (pozitii + valoare) cu ce asteapta scriptul — robust chiar daca muti W-urile intre med/materiale. Linie live: verde "✅ Complet" cand valoarea bate, portocaliu in progres, rosu daca-s PREA MULTE.
+
+**Fara duplicate med -> materiale (v1.48):** `cheieProdus(p)` = `denumire|lot|valoare|cantitate`. La mutarea unui medicament la materiale nu se mai dubleaza; lista de materiale (sarite + mutate) e deduplicata pe ambele pagini.
+
+**Nota receptie (v1.44):** NU mai modificam numarul — iCmed pune automat +1. Setam doar Data.
 
 **Insight-uri cheie iCmed:** id-uri campuri in iframe (prefix `ctl11_`): `cmbFurnizor`, `txtValoareFaraTVA`, `txtValoareTVA`, `txtValoareTotala`, `txtSeriaFacturii`, `txtNrFactura`, `txtDataFactura_ctl00`. Cota TVA = camp separat langa eticheta exact "TVA:" (dropdown 0/5/9/11/19/20/21/24). Butoane in pagina principala: `btnAddFactura` (➕ Factura), `btnNotaRec` (➕ Nota), `cmbFactura_Display`/`cmbNotaReceptie_Display` (= detectie antet prezent). Valori cu virgula. Testare pe clinic.icmed.ro = date REALE.
 

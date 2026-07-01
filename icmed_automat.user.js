@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.47
+// @version      1.48
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx*
@@ -158,6 +158,11 @@
         });
 
         return { produse, sarite };
+    }
+
+    // Cheie unica de linie de produs (ca sa nu dublam la mutarea med -> materiale)
+    function cheieProdus(p) {
+        return `${p.denumire}|${p.lotNr || ''}|${p.valoare}|${p.cantitate}`;
     }
 
     // ── Parsare antet factura (al 2-lea XML de la SAGA) ────────────────────────
@@ -1480,8 +1485,11 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
                 btnFill.disabled = false;
                 if (choice === 'materiale') {
                     const extras = JSON.parse(localStorage.getItem(KEYS.extraMateriale) || '[]');
-                    extras.push(prod);
-                    localStorage.setItem(KEYS.extraMateriale, JSON.stringify(extras));
+                    // nu dublam: adaugam doar daca produsul (denumire|lot|valoare|cantitate) nu e deja mutat
+                    if (!extras.some(e => cheieProdus(e) === cheieProdus(prod))) {
+                        extras.push(prod);
+                        localStorage.setItem(KEYS.extraMateriale, JSON.stringify(extras));
+                    }
                     idx++;
                     localStorage.setItem(LS_KEY, idx);
                     if (idx < lista.length) {
@@ -1546,12 +1554,20 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
                 ...p,
                 pretBaza: p.pretBaza || p.valoare || (parseFloat((p.pretBuc || '0').replace(',', '.')) * (p.totalBuc || 1))
             }));
-        lista = PAGINA === 'materiale' ? [...result.sarite, ...extras] : result.produse;
+        // Lista de materiale = sarite (fara cod W) + mutate din medicamente, DEDUPLICATE
+        // (ca sa nu apara acelasi produs de 2-3 ori). Calculata pe ambele pagini pt. numarare corecta.
+        const vazutMat = new Set();
+        const matDedup = [...result.sarite, ...extras].filter(p => {
+            const k = cheieProdus(p);
+            if (vazutMat.has(k)) return false;
+            vazutMat.add(k); return true;
+        });
+        lista = PAGINA === 'materiale' ? matDedup : result.produse;
 
         // Creeaza / actualizeaza factura in istoric
         const fc = infoFactura || getFacturaCurenta();
         if (fc) {
-            gasesteSauCreazaFactura(fc, result.produse.length, result.sarite.length + extras.length);
+            gasesteSauCreazaFactura(fc, result.produse.length, matDedup.length);
             localStorage.setItem(KEYS.facturaCurenta, JSON.stringify(fc));
         }
 

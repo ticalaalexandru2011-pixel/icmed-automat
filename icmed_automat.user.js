@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.45
+// @version      1.46
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx*
@@ -741,6 +741,53 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
     function antetEsteDone(antet) {
         return !!getAntetDone()[cheieAntet(antet) + '_' + PAGINA];
     }
+    // Citeste numerele din panoul "Detalii factura selectata" al iCmed (span-uri lblFact...)
+    function textSpan(idSuffix) {
+        const el = document.querySelector(`span[id$="${idSuffix}"]`);
+        return el ? (el.textContent || '') : null;
+    }
+    function countLabel(idSuffix) { // ex. "Med: 26" -> 26
+        const t = textSpan(idSuffix); if (t == null) return null;
+        const m = t.match(/(-?\d+)\s*$/); return m ? parseInt(m[1], 10) : null;
+    }
+    function valLabel(idSuffix) {    // ex. "Val factura: 4.345,17" -> 4345.17
+        const t = textSpan(idSuffix); if (t == null) return null;
+        const m = t.match(/-?[\d.]*\d,\d+|-?\d[\d.]*/);
+        return m ? (parseFloat(m[0].replace(/\./g, '').replace(',', '.')) || 0) : null;
+    }
+
+    // Verifica cate pozitii/ce valoare a alimentat iCmed fata de cat asteapta scriptul.
+    // Verificam pe TOTAL (pozitii + valoare) — robust chiar daca muti W-urile intre med/materiale.
+    function verificaAlimentare() {
+        const el = document.getElementById('ia-verif');
+        if (!el) return;
+        const nrPoz   = countLabel('lblFactNrPozitii');
+        const med     = countLabel('lblFactMed');
+        const mat     = countLabel('lblFactMat');
+        const valAlim = valLabel('lblFactValTotalAlim');
+        const valFact = valLabel('lblFactVal');
+        if (nrPoz == null && valFact == null) { el.style.display = 'none'; return; }
+        const fc = getFacturaCurenta();
+        const ist = fc ? getIstoric().find(f => f.cheie === fc.cheie) : null;
+        const asteptat = ist ? (ist.totalMed || 0) + (ist.totalMat || 0) : null;
+        const mon = v => (v == null ? '?' : v.toFixed(2).replace('.', ','));
+        const valBate = (valAlim != null && valFact != null) && Math.abs(valAlim - valFact) < 0.02;
+        const pozBate = (asteptat != null && nrPoz != null) ? (nrPoz === asteptat) : null;
+        const pozTxt = asteptat != null ? `${nrPoz}/${asteptat}` : `${nrPoz}`;
+        let culoare, txt;
+        if (valBate && pozBate !== false) {
+            culoare = '#2e7d32';
+            txt = `✅ Complet — ${pozTxt} pozitii, valoare bate (${mon(valFact)})`;
+        } else {
+            culoare = (nrPoz != null && asteptat != null && nrPoz > asteptat) ? '#b71c1c' : '#ef6c00';
+            txt = `⏳ ${pozTxt} pozitii · Med ${med ?? '?'} · Mat ${mat ?? '?'} · valoare ${mon(valAlim)}/${mon(valFact)}`;
+            if (nrPoz != null && asteptat != null && nrPoz > asteptat) txt = `⚠ PREA MULTE: ` + txt;
+        }
+        el.style.display = 'block';
+        el.style.background = culoare;
+        el.textContent = txt;
+    }
+
     // Detectie reala: combobox-ul "Factura" din pagina (cmbFactura_Display) e completat?
     function facturaPrezentaInPagina() {
         const disp = document.querySelector('input[id*="cmbFactura_Display"], input[name*="cmbFactura$Display"]');
@@ -1259,6 +1306,7 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
             </label>
             <select id="ia-factura-select" style="display:none;width:100%;font-size:12px;padding:4px;margin-bottom:6px;border-radius:4px;border:none;"></select>
             <button id="ia-btn-antet" style="display:none;width:100%;padding:8px;background:#8e24aa;border:none;border-radius:5px;color:#fff;font-weight:bold;cursor:pointer;font-size:12px;margin-bottom:8px;">📋 Completeaza Factura + Nota</button>
+            <div id="ia-verif" style="display:none;color:#fff;font-size:11px;font-weight:bold;text-align:center;padding:6px;border-radius:5px;margin-bottom:8px;"></div>
             <div id="ia-status" style="color:#c8e6c9;font-size:12px;margin-bottom:8px;"></div>
             <div id="ia-jump" style="display:none;align-items:center;gap:6px;margin-bottom:8px;">
                 <span style="font-size:12px;color:#c8e6c9;white-space:nowrap;">Mergi la nr:</span>
@@ -1960,6 +2008,7 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
         if (!document.getElementById('icmed-panel')) { init(); return; }
         const btn = document.getElementById('ia-btn-antet');
         if (btn && btn.style.display !== 'none' && !btn.disabled && antetCurent) actualizeazaButonAntet();
+        verificaAlimentare(); // compara pozitiile/valoarea alimentata cu ce asteapta scriptul
     }, 1500);
 
 })();

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.48
+// @version      1.49
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx*
@@ -847,7 +847,7 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
     function facturaTerminata(f) {
         if (!f || !f.antet) return false; // fara antet potrivit -> ramane VIZIBILA (cu avertizare)
         const d = getAntetDone(), c = cheieAntet(f.antet);
-        if (d[c + '_med'] || d[c + '_mat']) return true;                 // antet marcat gata (orice pagina)
+        if (d[c + '_med'] || d[c + '_materiale']) return true;           // antet marcat gata (orice pagina)
         return getIstoric().some(x => x.cheie === c && x.completata);    // sau produse terminate
     }
 

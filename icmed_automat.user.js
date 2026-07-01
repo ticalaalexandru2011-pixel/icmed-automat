@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.46
+// @version      1.47
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx*
@@ -1881,11 +1881,17 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
                 const fact = facturaPrezentaInPagina();
                 const nota = notaPrezentaInPagina();
                 if (fact && nota) {
-                    // ambele deja in pagina — marcam gata si o scoatem din lista
+                    // ambele deja in pagina — marcam gata, o scoatem din lista
                     marcheazaAntetDone(antetCurent);
                     rebuildDropdownFacturi(null);
+                    // si dam X (erase) la Factura si Nota receptie ca sa curatam pagina pt. urmatoarea
+                    btn.textContent = 'Se curata factura + nota…';
+                    const xNota = document.querySelector('input[type="image"][id$="cmbNotaReceptie_btnErase"], input[type="image"][name$="cmbNotaReceptie$btnErase"]');
+                    if (xNota) { xNota.click(); await sleep(700); }
+                    const xFact = document.querySelector('input[type="image"][id$="cmbFactura_btnErase"], input[type="image"][name$="cmbFactura$btnErase"]');
+                    if (xFact) { xFact.click(); await sleep(700); }
                     btn.style.background = '#2e7d32';
-                    btn.textContent = '✅ Scoasa din lista — treci la produse';
+                    btn.textContent = '✅ Scoasa din lista + curatat';
                 } else if (fact) {
                     // factura e salvata -> completam NOTA receptie (modalul ramane deschis pt. Salveaza)
                     btn.textContent = 'Se completeaza Nota…';

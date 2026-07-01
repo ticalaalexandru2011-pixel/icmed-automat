@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCmed Automat - Alimentare Stoc
 // @namespace    icmed-automat
-// @version      1.44
+// @version      1.45
 // @description  Completeaza automat formularul din XML exportat din SAGA
 // @author       Alex Ticala
 // @match        https://staging.icmed.ro/Main/Configurare/Intrari/AlimentareStocMedicamente.module.aspx*
@@ -1953,7 +1953,13 @@ Raspunde DOAR cu un obiect JSON pe ultima linie, fara text dupa el:
     } else {
         init();
     }
-    // Dupa Salveaza, iCmed reincarca pagina (postback) si panoul dispare — il reinjectam.
-    setInterval(() => { if (!document.getElementById('icmed-panel')) init(); }, 1500);
+    // Watcher: (1) reinjecteaza panoul daca dispare dupa Salveaza (postback iCmed);
+    // (2) sincronizeaza butonul antet cu starea REALA a paginii — asa scriptul isi da seama
+    //     singur ca factura/nota au fost deja introduse (chiar daca ai salvat MANUAL, nu din buton).
+    setInterval(() => {
+        if (!document.getElementById('icmed-panel')) { init(); return; }
+        const btn = document.getElementById('ia-btn-antet');
+        if (btn && btn.style.display !== 'none' && !btn.disabled && antetCurent) actualizeazaButonAntet();
+    }, 1500);
 
 })();
